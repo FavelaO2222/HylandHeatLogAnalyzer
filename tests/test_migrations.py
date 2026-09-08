@@ -25,8 +25,9 @@ class MigrationTests(unittest.TestCase):
         with closing(db.connect_database(self.path)) as connection:
             after = snapshot(connection)
             self.assertEqual(after.pop('evidence_links'), [])
+            self.assertEqual(after.pop('source_documents'), [])
             self.assertEqual(before, after)
-            self.assertEqual(db.validate_schema_version(connection), 3)
+            self.assertEqual(db.validate_schema_version(connection), db.SCHEMA_VERSION)
             self.assertEqual(created, connection.execute('SELECT created_at FROM schema_metadata').fetchone()[0])
             metadata = tuple(connection.execute('SELECT * FROM schema_metadata').fetchone())
         evidence.attach_evidence(self.path, 'finding', 1, 'relationship', 1)
@@ -44,7 +45,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual({item['id'] for item in events}, {1, 2})
         errors = search.search(self.path, 'same error', type='errors')['items']
         self.assertEqual({item['id'] for item in errors}, {1, 2})
-        # Reapplying an already-v3 database rebuilds (not duplicates) the index.
+        # Reapplying an already-current database rebuilds (not duplicates) the index.
         db.initialize_database(self.path)
         self.assertEqual({item['id'] for item in search.search(self.path, 'Shared', type='events')['items']},
                          {1, 2})

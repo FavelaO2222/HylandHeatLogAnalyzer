@@ -8,8 +8,8 @@ from typing import Optional, Union
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = Path(__file__).resolve().with_name('schema.sql')
-SCHEMA_VERSION = 3
-SUPPORTED_VERSIONS = (1, 2, 3)
+SCHEMA_VERSION = 4
+SUPPORTED_VERSIONS = (1, 2, 3, 4)
 DatabasePath = Optional[Union[str, Path]]
 
 
@@ -63,15 +63,17 @@ def _check_version(connection: sqlite3.Connection) -> None:
 
 
 def initialize_database(database: DatabasePath = None) -> Path:
-    """Create/reapply v3, or explicitly migrate an older database to v3 without changing existing rows.
+    """Create/reapply the current schema, or explicitly migrate an older database
+    to it without changing existing rows.
 
     schema.sql is always the full, current, idempotent schema (every statement
     is IF NOT EXISTS/OR IGNORE), so applying it to an older database additively
-    brings it straight to v3 in one pass regardless of its starting version --
-    v1 -> v2 added evidence_links; v1/v2 -> v3 additionally adds the events_fts/
-    errors_fts search index and its sync triggers (see schema.sql), rebuilt from
-    current events/errors content as part of that same script. Read-only
-    operations and existing writers never migrate implicitly.
+    brings it straight to SCHEMA_VERSION in one pass regardless of its starting
+    version -- v1 -> v2 added evidence_links; v1/v2 -> v3 added the events_fts/
+    errors_fts search index; v1/v2/v3 -> v4 added source_documents and its own
+    FTS5 index (see schema.sql), rebuilt from current content as part of that
+    same script. Read-only operations and existing writers never migrate
+    implicitly.
     """
     path = resolve_database_path(database)
     schema = SCHEMA_PATH.read_text(encoding='utf-8')

@@ -1,4 +1,4 @@
--- Authoritative fresh-database schema v3. db.initialize_database migrates v1/v2 explicitly.
+-- Authoritative fresh-database schema v4. db.initialize_database migrates v1/v2/v3 explicitly.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 3);
+INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 4);
 
 -- Raw evidence references. created_at is the optional original artifact time.
 CREATE TABLE IF NOT EXISTS source_artifacts (
@@ -73,26 +73,51 @@ CREATE INDEX IF NOT EXISTS idx_errors_run_timestamp ON errors (test_run_id, time
 CREATE INDEX IF NOT EXISTS idx_errors_artifact_line ON errors (source_artifact_id, source_line);
 CREATE INDEX IF NOT EXISTS idx_errors_severity ON errors (severity);
 
--- FTS5 search index (schema v3) begin --
--- events_fts/errors_fts are external-content FTS5 indexes (content=events/errors,
--- content_rowid=id): events/errors stay the only source of truth, these virtual
--- tables only ever hold a derived search index over their text columns. Kept
--- live by the AFTER INSERT/UPDATE/DELETE triggers below on every write; the
--- trailing 'rebuild' commands recompute the whole index from current
--- events/errors content every time this script runs (fresh init, an explicit
--- v1/v2 -> v3 migration, or a plain reapply) -- idempotent and cheap at this
--- project's scale, so no separate drift-detection logic is needed here.
--- database.search.rebuild_search_index() exposes the same 'rebuild' command
--- standalone (CLI --rebuild / MCP rebuild_search_index) for repairing drift
--- from any write that bypassed these triggers (e.g. a raw sqlite3 connection).
--- database.backup excludes these tables from SQL dumps and recreates them
--- (via the fragment between these two markers) after a restore -- see that
--- module's docstring for why a plain dump/restore cannot round-trip FTS5's
--- internal shadow-table state.
+-- FTS5 search indexes begin --
+-- events_fts/errors_fts/source_documents_fts are external-content FTS5 indexes
+-- (content=events/errors/source_documents, content_rowid=id): those tables stay
+-- the only source of truth, these virtual tables only ever hold a derived
+-- search index over their text columns. Kept live by the AFTER INSERT/UPDATE/
+-- DELETE triggers below on every write; the trailing 'rebuild' commands
+-- recompute the whole index from current content every time this script runs
+-- (fresh init, an explicit migration, or a plain reapply) -- idempotent and
+-- cheap at this project's scale, so no separate drift-detection logic is
+-- needed here. database.search.rebuild_search_index() exposes the same
+-- 'rebuild' command standalone (CLI --rebuild / MCP rebuild_search_index) for
+-- repairing drift from any write that bypassed these triggers (e.g. a raw
+-- sqlite3 connection). database.backup excludes all of these tables (plus
+-- source_documents itself, see below) from SQL dumps and recreates them (via
+-- the fragment between these two markers) after a restore -- see that
+-- module's docstring: events_fts/errors_fts/source_documents_fts are
+-- excluded because a plain dump/restore cannot round-trip FTS5's internal
+-- shadow-table state, while source_documents itself is excluded on a
+-- different, deliberate policy (never put potentially large/copyrighted
+-- ingested source text in a git-tracked file). Because both are excluded,
+-- source_documents' own table definition lives in this block too, so a
+-- restore recreates it structurally (empty) alongside its index; restoring
+-- its actual content means re-running database.ingest_source, not a rebuild.
+--
+-- Schema v4: one row per ingested source/decompiled-assembly file (see
+-- database/ingest_source.py). Unlike events/errors, ingestion never
+-- deduplicates against prior runs of the same source_artifact -- re-ingesting
+-- after code changes is a deliberate new snapshot, not a reused one, so the
+-- history of what a file looked like as of a given ingestion is preserved.
+CREATE TABLE IF NOT EXISTS source_documents (
+    id INTEGER PRIMARY KEY,
+    source_artifact_id INTEGER NOT NULL REFERENCES source_artifacts(id) ON DELETE RESTRICT,
+    relative_path TEXT NOT NULL CHECK (length(trim(relative_path)) > 0),
+    language TEXT,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_source_documents_artifact_path ON source_documents (source_artifact_id, relative_path);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
     message, component, category, event_type, content='events', content_rowid='id');
 CREATE VIRTUAL TABLE IF NOT EXISTS errors_fts USING fts5(
     message, component, stack_trace, content='errors', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS source_documents_fts USING fts5(
+    relative_path, content, content='source_documents', content_rowid='id');
 
 CREATE TRIGGER IF NOT EXISTS events_fts_ai AFTER INSERT ON events BEGIN
     INSERT INTO events_fts(rowid, message, component, category, event_type)
@@ -124,9 +149,25 @@ CREATE TRIGGER IF NOT EXISTS errors_fts_au AFTER UPDATE ON errors BEGIN
     VALUES (new.id, new.message, new.component, new.stack_trace);
 END;
 
+CREATE TRIGGER IF NOT EXISTS source_documents_fts_ai AFTER INSERT ON source_documents BEGIN
+    INSERT INTO source_documents_fts(rowid, relative_path, content)
+    VALUES (new.id, new.relative_path, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS source_documents_fts_ad AFTER DELETE ON source_documents BEGIN
+    INSERT INTO source_documents_fts(source_documents_fts, rowid, relative_path, content)
+    VALUES ('delete', old.id, old.relative_path, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS source_documents_fts_au AFTER UPDATE ON source_documents BEGIN
+    INSERT INTO source_documents_fts(source_documents_fts, rowid, relative_path, content)
+    VALUES ('delete', old.id, old.relative_path, old.content);
+    INSERT INTO source_documents_fts(rowid, relative_path, content)
+    VALUES (new.id, new.relative_path, new.content);
+END;
+
 INSERT INTO events_fts(events_fts) VALUES('rebuild');
 INSERT INTO errors_fts(errors_fts) VALUES('rebuild');
--- FTS5 search index (schema v3) end --
+INSERT INTO source_documents_fts(source_documents_fts) VALUES('rebuild');
+-- FTS5 search indexes end --
 
 CREATE TABLE IF NOT EXISTS entities (
     id INTEGER PRIMARY KEY,
