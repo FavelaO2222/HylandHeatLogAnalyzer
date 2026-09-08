@@ -22,6 +22,7 @@ from database.mcp_server import (
     update_unknown_status,
     attach_evidence, list_evidence, compare_runs,
     search, rebuild_search_index,
+    research, add_experiment, list_experiments,
 )
 
 
@@ -225,6 +226,31 @@ class McpServerToolTests(unittest.TestCase):
         self.assertEqual(rebuild_search_index(), 'Rebuilt search index: 1 events, 0 errors, 0 documents indexed.')
         self.assertEqual(len(search('OfficerLee')['items']), 1)
 
+    def test_research_returns_structured_packet_with_no_invented_evidence(self):
+        result = research('TotallyUnknownSymbolXYZ')
+        for page in result['sections'].values():
+            self.assertEqual(page['total'], 0)
+        self.assertIn('No source-code match', result['interpretation'][0])
+
+    def test_research_finds_real_evidence(self):
+        run_id, _ = self.seed_run_with_identity_event()
+        result = research('OfficerLee')
+        self.assertGreater(result['sections']['events']['total'], 0)
+        self.assertEqual(result['sections']['events']['items'][0]['test_run_id'], run_id)
+
+    def test_add_and_list_experiments(self):
+        result = add_experiment('Does GoonPool refill?', 'Refilled after 3 days.', symbols='GoonPool,CartelGoon')
+        self.assertEqual(result['id'], 1)
+        self.assertEqual(result['symbols'], ['GoonPool', 'CartelGoon'])
+        self.assertIn('Does GoonPool refill?', list_experiments())
+        self.assertEqual(list_experiments(symbol='GoonPool').count('[1]'), 1)
+        self.assertEqual(list_experiments(symbol='NoSuchSymbol'), 'No experiments recorded.')
+
+    def test_add_experiment_validation_error_surfaces_real_message(self):
+        result = add_experiment('   ', 'result')
+        self.assertIn('error', result)
+        self.assertIn('question must not be empty', result['error'])
+
     def test_backup_database_error_surfaces_real_message(self):
         # configure() self-initializes a missing database, so it can't produce this error path;
         # plant a genuine foreign-key violation instead (bypassing connect_database's enforcement,
@@ -262,7 +288,7 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
                              'add_relationship', 'list_relationships',
                              'sync_entities', 'list_entities', 'build_context', 'build_entity_context',
                              'inspect_database', 'backup_database', 'attach_evidence', 'list_evidence', 'compare_runs',
-                             'search', 'rebuild_search_index'):
+                             'search', 'rebuild_search_index', 'research', 'add_experiment', 'list_experiments'):
                 self.assertIn(expected, names)
 
             result = await client.call_tool('add_finding', {'finding': 'Protocol round trip works'})

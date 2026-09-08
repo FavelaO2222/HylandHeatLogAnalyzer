@@ -17,8 +17,9 @@ import sqlite3
 
 from mcp.server.mcpserver import MCPServer
 
-from . import (backup, context_builder, entity_extraction, evidence, inspect_db, record_decision, record_finding,
-               record_relationship, record_unknown, run_comparison)
+from . import (backup, context_builder, entity_extraction, evidence, inspect_db, record_decision, record_experiment,
+               record_finding, record_relationship, record_unknown, run_comparison)
+from . import research as research_module
 from . import search as fts_search
 from .db import database_exists, initialize_database, resolve_database_path
 
@@ -334,6 +335,64 @@ def rebuild_search_index() -> str:
         return (f"Rebuilt search index: {result['events_indexed']} events, {result['errors_indexed']} errors, "
                 f"{result['documents_indexed']} documents indexed.")
     return _safely(action)
+
+
+@mcp.tool(structured_output=True)
+def research(query: str, limit: int = 6) -> dict[str, object]:
+    """Compact, honest, cross-artifact evidence packet for a symbol or short research
+    question (e.g. "NPC.EnterBuilding"). Requires schema v5.
+
+    Spans every artifact class this database holds: Hyland Heat mod-source
+    call/patch sites, decompiled game-code declaration/implementation
+    locations, related runtime-log events/errors, related findings/unknowns/
+    decisions, and matching recorded experiments. Each section is
+    independently bounded to `limit` (1-100 items) and an empty section is
+    reported as empty rather than omitted -- absence of evidence is a fact
+    here, never invented. Also returns a structural (never causal)
+    interpretation and one rule-based suggested next research target. Prefer
+    this over raw `search` when the question spans more than one artifact
+    class, which is the usual case for "what explains this game behavior."
+    """
+    try:
+        return research_module.research(_db(), query, limit=limit)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool(structured_output=True)
+def add_experiment(question: str, observed_result: str, symbols: str | None = None,
+                   source_log: str | None = None, test_run_id: int | None = None) -> dict[str, object]:
+    """Record an experiment: a deliberate observation ("does X change during Y")
+    plus what was actually observed. Requires schema v5.
+
+    Distinct from a finding (a conclusion, possibly drawn from several such
+    observations) -- this is the record of having looked. symbols is a
+    comma-separated list tying the experiment to specific code symbols, so
+    `research`/`list_experiments` can surface it later. source_log accepts
+    either a raw game log or a pre-summarized brief text file; either way
+    it's registered as an ordinary, sha256-deduped source artifact rather
+    than parsed. The server's fixed mod repo path is not implicitly used
+    here -- pass the CLI's --mod-repo directly if you need the commit
+    recorded (this MCP tool intentionally does not accept an arbitrary repo
+    path, for the same reason no tool here accepts a database path).
+    """
+    try:
+        symbol_list = tuple(symbols.split(',')) if symbols else ()
+        experiment_id = record_experiment.add_experiment(
+            _db(), question, observed_result, symbols=symbol_list,
+            source_log=source_log, test_run_id=test_run_id)
+        return {'id': experiment_id, 'question': question, 'observed_result': observed_result,
+                'symbols': [s.strip() for s in symbol_list if s.strip()]}
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool()
+def list_experiments(symbol: str | None = None) -> str:
+    """List recorded experiments, optionally filtered to one exact symbol. Requires schema v5."""
+    return _safely(lambda: '\n'.join(
+        record_experiment.format_experiment_row(row) for row in record_experiment.list_experiments(_db(), symbol)
+    ) or 'No experiments recorded.')
 
 
 def main(argv=None):

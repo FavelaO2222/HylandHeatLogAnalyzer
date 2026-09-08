@@ -1,6 +1,7 @@
 """Tests for database.ingest_source: file-level document ingestion and its CLI."""
 
 from contextlib import closing, redirect_stderr, redirect_stdout
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -41,20 +42,24 @@ class IngestSourceTests(unittest.TestCase):
         })
         result = ingest_source.ingest_directory(self.path, 'source_code', source)
         self.assertEqual(result['documents_stored'], 2)
-        self.assertEqual(result['skipped'], 0)
+        self.assertEqual(result['unchanged'], 0)
+        self.assertEqual(result['undecodable'], 0)
+        self.assertEqual(result['collection'], str(source.resolve()))
         self.assertIsNone(result['mod_revision'])
         with closing(db.connect_database(self.path)) as connection:
             paths = {row[0] for row in connection.execute('SELECT relative_path FROM source_documents')}
             self.assertEqual(paths, {'A.cs', 'Sub/B.cs'})
-            language = connection.execute(
-                "SELECT language FROM source_documents WHERE relative_path='A.cs'").fetchone()[0]
+            language, digest = connection.execute(
+                "SELECT language, content_sha256 FROM source_documents WHERE relative_path='A.cs'").fetchone()
             self.assertEqual(language, 'csharp')
+            self.assertEqual(digest, hashlib.sha256(b'class A { void Foo() {} }').hexdigest())
             artifact = connection.execute(
                 'SELECT artifact_type, path, notes FROM source_artifacts WHERE id=?',
                 (result['source_artifact_id'],)).fetchone()
             self.assertEqual(artifact[0], 'source_code')
             self.assertEqual(artifact[1], str(source))
-            self.assertEqual(json.loads(artifact[2]), {'file_count': 2, 'skipped': 0, 'mod_revision': None})
+            self.assertEqual(json.loads(artifact[2]),
+                             {'file_count': 2, 'unchanged': 0, 'undecodable': 0, 'mod_revision': None})
 
     def test_custom_extensions_are_case_insensitive(self):
         source = self.write_tree({'a.CS': 'class A {}', 'b.py': 'pass'})
@@ -66,17 +71,64 @@ class IngestSourceTests(unittest.TestCase):
         (source / 'bad.cs').write_bytes(b'\xff\xfe\x00binary garbage')
         result = ingest_source.ingest_directory(self.path, 'source_code', source)
         self.assertEqual(result['documents_stored'], 1)
-        self.assertEqual(result['skipped'], 1)
+        self.assertEqual(result['undecodable'], 1)
 
-    def test_repeated_ingestion_creates_a_new_snapshot_not_a_dedup(self):
+    def test_changed_content_creates_a_new_row_preserving_history(self):
         source = self.write_tree({'A.cs': 'class A {}'})
         first = ingest_source.ingest_directory(self.path, 'source_code', source)
         (source / 'A.cs').write_text('class A { void Changed() {} }', encoding='utf-8')
         second = ingest_source.ingest_directory(self.path, 'source_code', source)
         self.assertNotEqual(first['source_artifact_id'], second['source_artifact_id'])
+        self.assertEqual(second['documents_stored'], 1)
+        self.assertEqual(second['unchanged'], 0)
         with closing(db.connect_database(self.path)) as connection:
+            # Both versions are preserved as separate rows, not overwritten.
             self.assertEqual(connection.execute('SELECT count(*) FROM source_documents').fetchone()[0], 2)
             self.assertEqual(connection.execute('SELECT count(*) FROM source_artifacts').fetchone()[0], 2)
+
+    def test_unchanged_content_is_not_duplicated_but_artifact_row_still_created(self):
+        source = self.write_tree({'A.cs': 'class A {}', 'B.cs': 'class B {}'})
+        first = ingest_source.ingest_directory(self.path, 'source_code', source)
+        second = ingest_source.ingest_directory(self.path, 'source_code', source)
+        self.assertEqual(second['documents_stored'], 0)
+        self.assertEqual(second['unchanged'], 2)
+        self.assertNotEqual(first['source_artifact_id'], second['source_artifact_id'])
+        with closing(db.connect_database(self.path)) as connection:
+            # No duplicate document rows, but the second ingestion attempt is
+            # still logged as its own source_artifacts row (an audit trail of
+            # when the collection was last checked), even though it added no data.
+            self.assertEqual(connection.execute('SELECT count(*) FROM source_documents').fetchone()[0], 2)
+            self.assertEqual(connection.execute('SELECT count(*) FROM source_artifacts').fetchone()[0], 2)
+
+    def test_partial_change_only_inserts_the_changed_file(self):
+        source = self.write_tree({'A.cs': 'class A {}', 'B.cs': 'class B {}'})
+        ingest_source.ingest_directory(self.path, 'source_code', source)
+        (source / 'A.cs').write_text('class A { void Changed() {} }', encoding='utf-8')
+        result = ingest_source.ingest_directory(self.path, 'source_code', source)
+        self.assertEqual(result['documents_stored'], 1)
+        self.assertEqual(result['unchanged'], 1)
+        with closing(db.connect_database(self.path)) as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM source_documents').fetchone()[0], 3)
+
+    def test_explicit_collection_overrides_root_path_default(self):
+        source = self.write_tree({'A.cs': 'class A {}'})
+        first = ingest_source.ingest_directory(self.path, 'source_code', source, collection='stable-id')
+        self.assertEqual(first['collection'], 'stable-id')
+        # A different, ephemeral-looking root, same explicit collection,
+        # same unchanged content -> still recognized as unchanged.
+        other_root = self.root / 'other-copy'
+        other_root.mkdir()
+        (other_root / 'A.cs').write_text('class A {}', encoding='utf-8')
+        second = ingest_source.ingest_directory(self.path, 'source_code', other_root, collection='stable-id')
+        self.assertEqual(second['documents_stored'], 0)
+        self.assertEqual(second['unchanged'], 1)
+
+    def test_different_collections_do_not_dedup_against_each_other(self):
+        source = self.write_tree({'A.cs': 'class A {}'})
+        ingest_source.ingest_directory(self.path, 'source_code', source, collection='collection-one')
+        result = ingest_source.ingest_directory(self.path, 'source_code', source, collection='collection-two')
+        self.assertEqual(result['documents_stored'], 1)
+        self.assertEqual(result['unchanged'], 0)
 
     def test_mod_repo_records_git_revision(self):
         repo = self.root / 'mod-repo'
@@ -102,7 +154,7 @@ class IngestSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not a directory'):
             ingest_source.ingest_directory(self.path, 'source_code', self.root / 'nonexistent')
 
-    def test_requires_schema_v4(self):
+    def test_requires_schema_v5(self):
         v1_path = self.root / 'v1.db'
         import sqlite3
         connection = sqlite3.connect(v1_path)

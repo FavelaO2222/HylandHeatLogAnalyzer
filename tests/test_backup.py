@@ -280,6 +280,24 @@ class BackupRestoreTests(unittest.TestCase):
         result = search(restored_path, 'ReingestableMethod', type='documents')
         self.assertEqual(len(result['items']), 1)
 
+    def test_dump_includes_experiments_unlike_source_documents(self):
+        # experiments/experiment_symbols are ordinary structured research
+        # records (a question and an observed result, never raw source
+        # text) -- included in the public dump exactly like findings/
+        # decisions already are, unlike source_documents above.
+        from database.record_experiment import add_experiment
+        self.open_database()
+        add_experiment(self.path, 'Does GoonPool refill?', 'Refilled after 3 days.', symbols=('GoonPool',))
+        dump_database(self.path, self.backup_path)
+        text = self.backup_path.read_text(encoding='utf-8')
+        self.assertIn('Does GoonPool refill?', text)
+        self.assertIn('GoonPool', text)
+        restored_path = Path(self.temp.name) / 'restored.db'
+        restore_database(restored_path, self.backup_path)
+        with closing(db.connect_database(restored_path)) as restored:
+            self.assertEqual(restored.execute('SELECT count(*) FROM experiments').fetchone()[0], 1)
+            self.assertEqual(restored.execute('SELECT count(*) FROM experiment_symbols').fetchone()[0], 1)
+
     def test_v1_restore_stays_v1_with_no_search_index(self):
         # A v1 backup restores as v1, with no FTS5 index -- restore never
         # migrates a database implicitly, and a v1 database has no search
