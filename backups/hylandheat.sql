@@ -433,6 +433,7 @@ CREATE TABLE findings (
     CHECK (source_line IS NULL OR source_artifact_id IS NOT NULL)
 );
 INSERT INTO "findings" VALUES(1,2,NULL,'OfficerLee2''s copied SceneId maps back to OfficerLee, ruling out a genuinely independent disposable SWAT clone.','strong','active',1,NULL,262,'2026-09-08T03:41:22.493Z','2026-09-08T03:41:22.493Z');
+INSERT INTO "findings" VALUES(2,NULL,NULL,'Sanity check: confirming the pre-commit hook picks up new data.','tentative','active',NULL,NULL,NULL,'2026-09-08T04:14:56.296Z','2026-09-08T04:14:56.296Z');
 CREATE TABLE relationships (
     id INTEGER PRIMARY KEY,
     source_entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE RESTRICT,
