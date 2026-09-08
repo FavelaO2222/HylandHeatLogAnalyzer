@@ -1,0 +1,11 @@
+[2026-09-07T12:00:00-05:00] [INFO] [HylandHeat] Hyland Heat loaded.
+[2026-09-07T12:00:01-05:00] [INFO] [HylandHeat] OFFICER CLONE POPULATION READY: Created=20/20
+[2026-09-07T12:00:02-05:00] [INFO] [HylandHeat] GOON ACTUAL TRANSITION: Classification=UNSPAWNED_TO_SPAWNED
+[2026-09-07T12:00:02-05:00] [INFO] [HylandHeat] TRANSITION BEFORE: NPCID=synthetic_goon, IsGoonSpawned=False, UnityInstanceID=42
+[2026-09-07T12:00:02-05:00] [INFO] [HylandHeat] TRANSITION AFTER: NPCID=synthetic_goon, IsGoonSpawned=True, UnityInstanceID=42
+[2026-09-07T12:00:03-05:00] [WARNING] [HylandHeat] GOON CENSUS INCOMPLETE: pool lists unavailable
+[2026-09-07T12:00:04-05:00] [WARNING] [HylandHeat] GOON CENSUS INCOMPLETE: pool lists unavailable
+[2026-09-07T12:00:05-05:00] [INFO] [HylandHeat][SWAT] DEPLOY REJECTED: lifecycle research locked, State=Dormant, Live=0
+[2026-09-07T12:00:06-05:00] [INFO] [HylandHeat][SWAT] RECALL IGNORED: Reason=Manual, no tracked unit, State=Dormant, Live=0
+[2026-09-07T12:00:07-05:00] [INFO] [HylandHeat] TEST VERDICT: BLOCKED
+[2026-09-07T12:00:08-05:00] [SESSION] [HylandHeat] SESSION END Reason=ProcessExit

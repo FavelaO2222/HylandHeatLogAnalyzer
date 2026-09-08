@@ -1,0 +1,492 @@
+# Hyland Heat Log Analyzer
+
+A local, offline command-line analyzer for Hyland Heat / MelonLoader `.log` and
+`.txt` files. Python 3.9+; standard library only. No game, internet connection,
+dependencies, or virtual environment required. Input logs are opened read-only.
+
+## PyCharm and Usage
+
+Open the `HylandHeatLogAnalyzer` folder using PyCharm's **File > Open**. Select an
+installed Python 3.9+ interpreter in the project's Python Interpreter settings.
+Optionally create a virtual environment there, or run `python -m venv .venv` and
+select its interpreter. No packages need installing.
+
+From the terminal in this folder (`python3` also works on Linux):
+
+```bash
+python hyland_heat_log_analyzer.py "/path/to/HylandHeat_20260907_123456.log"
+python hyland_heat_log_analyzer.py "/path/to/log.log" --output "./reports"
+python hyland_heat_log_analyzer.py sample_logs/synthetic_playtest.log --output reports --csv
+python hyland_heat_log_analyzer.py "/path/to/audit.log" --profile read-only-audit --brief --output reports
+python hyland_heat_log_analyzer.py "/path/to/log.txt" --no-json
+python -m unittest discover -s tests -v
+```
+
+By default, text and JSON reports go into a `reports` directory beside the input.
+`--output` selects another directory; relative paths are relative to the terminal's
+working directory. Report names use the input stem plus `_summary.txt` and
+`_summary.json`. `--csv` adds deduplicated event rows in `_summary.csv`.
+Existing reports with these names are overwritten. Input aliases are rejected.
+The console prints the verdict, reasons, and report paths. Exit status is 0 for
+successful analysis (including NEEDS ATTENTION), 2 for invalid input or I/O errors.
+
+## Evidence and Verdicts
+
+Select the test requirements explicitly with `--profile`:
+
+| Profile | Required evidence |
+| --- | --- |
+| `general` (default) | Both goon transition directions and confirmed SWAT deployment |
+| `goon-lifecycle` | Both actual goon transition directions |
+| `swat-deployment` | Confirmed SWAT deployment with unit evidence |
+| `read-only-audit` | Explicit read-only network audit baseline, registry membership and scene registry messages, and dormant/live-zero observation |
+
+Profiles are user-selected test context, not inferred intent. A read-only audit
+does not require spawning or goon transitions. Only the known
+`DEPLOY REJECTED: lifecycle research locked` message with `State=Dormant, Live=0`
+is treated as an expected gate in that profile. Other rejection reasons still
+need attention. Positive live/tracked observations or a non-dormant SWAT state
+conflict with read-only scope and need attention. Errors, duplicate identities,
+explicit failed/blocked tests, and integrity failures remain visible in every
+profile. Analyze one playtest session at a time.
+
+An audit PASS means the required diagnostic observations were captured; it does
+not validate the registry values or establish that clones are safe. Prefab
+catalog completeness is not a requirement of this basic identity-audit profile.
+
+The following rules apply to the selected profile (the original general profile
+still requires both subsystems):
+
+- NEEDS ATTENTION: error/exception/fatal lines, explicit duplicate identities,
+  rejected/failed/blocked SWAT attempts, test failures/blocked prerequisites,
+  or explicit identity/transition integrity failures.
+- INCONCLUSIVE: either goon direction or confirmed SWAT deployment is missing;
+  explicit inconclusive test verdicts, warnings, or decoding replacement
+  characters also prevent PASS.
+- PASS: the selected profile's required observations
+  were logged with no detected problems above. This is only an evidence check,
+  not proof of gameplay correctness, identity ownership, or safe teardown.
+
+An actual transition requires `GOON ACTUAL TRANSITION:` and one of
+`UNSPAWNED_TO_SPAWNED` / `SPAWNED_TO_UNSPAWNED`. The directly following BEFORE/AFTER
+lines are attached to it. Each transition occurrence is retained, even if its
+classification line repeats. The state labels come from the classification;
+snapshot fields are exported separately. Instance appearance, disappearance,
+replacement, and ordinary snapshots never count as actual transitions.
+
+SWAT confirmation requires explicit `State=Deployed`, `DEPLOY SUCCESS`, or similar
+success wording plus a positive live/tracked count or `TRACKED UNIT: ID=...`.
+Unit evidence must appear on that line or within the next five physical lines.
+Rejection, recall, zero counts, other states, negative wording, and session
+initialization/shutdown clear pending success. Count-only lines do not prove a
+deployment. Unrecognized success wording remains inconclusive. Confirmation does
+not prove safe network identity or cleanup. Rejections remain attention items
+unless the explicit read-only profile recognizes the exact expected safety gate.
+
+## Low-Cost AI Review
+
+Add `--brief` to also write `<log_stem>_brief.txt`, capped at 6,000 characters
+(not an exact token budget). Start AI review with this file. It includes the
+profile, verdict, counts, recommendations, and ranked evidence with original
+source line numbers. Retrieve specific source lines when more context is needed;
+do not routinely send the complete JSON or original log to the model.
+
+The detailed summary prioritizes errors, verdicts, rejections, actual transitions,
+and diagnostic results over routine observations. Within each priority, later
+messages come first, so final results are not hidden behind startup noise.
+Both outputs are selections and cannot guarantee every important result fits;
+JSON and original source references remain available for follow-up.
+
+## Patterns and Provenance
+
+`patterns.py` centralizes compiled, case-insensitive expressions, field extraction,
+severity classification, and evidence markers. Add a named regex to `PATTERNS`
+to recognize new messages; category counts and JSON events include it automatically.
+Use a `swat_` prefix for SWAT-only classifications. Add a test string in
+`tests/test_analyzer.py`; if adding a new report group or verdict rule, update the
+analyzer explicitly. Keep observation patterns separate from success rules.
+
+The initial phrases were checked against a locally available saved MelonLoader
+network-audit log: `INACTIVE CLONE CREATED`, `OFFICER CLONE QUEUE PROGRESS`,
+`REGISTRY MEMBERSHIP`, `SCENE REGISTRY`, `DEPLOY REJECTED`, `BASELINE WORLD READY`,
+and `RECALL IGNORED`. Initialization and dormant/live-zero forms were also observed.
+Actual goon transition, duplicate identity, and population-ready formats were
+checked against local C# logger emit sites; they were not confirmed by that saved
+runtime log. SWAT success and test-verdict patterns are provisional vocabulary
+tested with synthetic strings. The supplied sample is entirely synthetic and
+contains no copied personal paths or real identities.
+
+Useful future examples to supply: successful SWAT deployment and tracking lines,
+test-run start/end/verdict formats, shutdown variants, and police-out/infamy/patrol
+messages that the general patterns miss. Supply exact message text with private
+values redacted. Never broaden a confirmation pattern merely to obtain PASS.
+
+## Deduplication, Exports, and Limitations
+
+Input is read line by line as UTF-8 (optional BOM), replacing invalid bytes.
+First/last timestamps mean file order, not chronological minimum/maximum; missing
+dates and midnight rollover are not inferred. Timestamp strings preserve their
+original offsets and precision.
+
+"Unique logical events" means exact message text after stripping the leading
+timestamp and ANSI color codes. Source tags, severity, case, identities, and
+numbers remain significant. Distinct messages with changing counters remain
+distinct. Category counts overlap, but matching lines count each line once.
+Each severity line receives one severity, in priority order FATAL, ERROR,
+EXCEPTION, WARNING. Consecutive .NET stack frames and inner-exception markers are
+attached to the first occurrence of each exception/error message, up to 40 lines,
+with original line references and an omitted-line count. They are not counted
+as independent matching events or severity lines. Repeated exception messages
+retain the first stack only; later stack variants remain in the original log.
+The brief selects up to five frames per included error, including later callers.
+
+JSON schema version 2 contains metadata, selected profile, missing evidence,
+expected rejection references, attached stack frames, deduplicated detected events, all actual
+transition occurrences, identity labels, SWAT events and confirmation references,
+test verdicts, repeated messages, and important source lines. Events contain
+first/last line, first timestamp, count, original first line, categories, and
+parsed fields. No claim is made that separate identity labels are separate NPCs.
+Memory scales with unique matching messages, identity labels, and transition
+occurrences, not every input line. Logs with many unique snapshots can still
+produce large JSON files. Text sections show at most 12 messages, 30 identity
+labels, and 30 important source lines, with every actual transition listed.
+JSON retains all recognized unique events. Reports contain original log data;
+review them for private information before sharing.
+
+Comma-delimited fields are parsed best-effort, so embedded commas (positions or
+lists) may yield partial values; original lines are retained. Multiline transition
+association assumes the logger's immediate BEFORE/AFTER layout and cannot prove
+association under interleaved writers. General regex patterns can produce false
+positives or miss new wording, including unusual negations. Other mods' errors
+remain visible rather than being attributed automatically to Hyland Heat.
+Concatenated logs without session boundaries should be analyzed separately.
+
+This tool only summarizes evidence present in the log and cannot prove behavior
+that was never logged. A logged test PASS cannot substitute for missing subsystem
+evidence. Recommendations do not authorize risky spawn or teardown experiments.
+
+The `analyze`, `parse_line`, and `render_report` functions can be reused for future
+timeline, comparison, and test-specific evidence extraction features.
+
+## Research Database: Phase 1
+
+This section records the Phase 1 foundation. Optional analyzer ingestion is now
+implemented in Phase 2, documented below; the schema remains version 1.
+
+### Project Structure Found
+
+Before adding the database, the PyCharm workspace contained a separate `main.py`
+and the `HylandHeatLogAnalyzer/` directory. The analyzer directory contained
+`hyland_heat_log_analyzer.py`, `patterns.py`, this README, `.gitignore`,
+`sample_logs/`, `reports/`, and `tests/test_analyzer.py`. It used standalone
+Python modules and standard-library `unittest`, with no existing database package
+or packaging configuration. The 26 analyzer tests passed before this addition.
+No existing analyzer files were moved, renamed, or behaviorally changed.
+
+The independent database component now lives alongside those modules:
+
+```text
+HylandHeatLogAnalyzer/
+  database/
+    __init__.py
+    schema.sql
+    init_db.py
+    db.py
+  data/
+    hylandheat.db          # generated, ignored by Git
+  tests/
+    test_analyzer.py       # unchanged
+    test_database.py
+```
+
+### Role and Sources of Truth
+
+SQLite is a local, portable, file-based structured research/evidence store using
+Python's built-in `sqlite3`. No server, ORM, or additional dependencies are needed.
+
+```text
+Raw logs/files             = authoritative raw evidence
+SQLite                    = structured evidence and research knowledge
+Git/source tree           = authoritative code
+AI briefs/context packets = disposable derived context for LLMs
+```
+
+Raw evidence, structured events/errors, research findings, unresolved questions,
+and intentional decisions remain separate records. A decision does not become
+runtime evidence; an unknown does not become a confirmed finding automatically.
+
+The intended future flow is:
+
+```text
+Raw evidence -> parser/scanner -> SQLite -> context builder -> AI consumer
+```
+
+Phase 1 implements only SQLite. It does not ingest logs, integrate the analyzer,
+scan assemblies or source code, generate findings, query an LLM, use embeddings
+or vector search, or expose MCP tools. Analyzer JSON schema version 2 and database
+schema version 1 are separate version schemes.
+
+### Initialization and Paths
+
+From the `HylandHeatLogAnalyzer` directory:
+
+```bash
+python -m database.init_db
+python -m database.init_db --database data/hylandheat.db
+```
+
+Both commands create `HylandHeatLogAnalyzer/data/hylandheat.db`. Parent directories
+are created as needed. Absolute paths are also accepted. All relative database
+paths are resolved against `HylandHeatLogAnalyzer/`, determined from `db.py`'s
+location, regardless of the current shell directory. `~` is expanded normally.
+This database-path rule is independent of the analyzer's existing report-path rule.
+
+Python still needs to locate the `database` module: run from the analyzer folder,
+set the PyCharm run configuration's working directory there, or add that folder
+to `PYTHONPATH`. For example, from elsewhere on Linux/macOS:
+
+```bash
+PYTHONPATH="/path/to/HylandHeatLogAnalyzer" python -m database.init_db --database data/hylandheat.db
+```
+
+Initialization prints the resolved database path and version, and returns exit
+code 0. Errors print a concise message to stderr and return 2. Reinitializing
+version 1 creates any missing schema objects without deleting existing rows or
+resetting the schema metadata timestamps. No test or research data is inserted;
+the only initial row is the schema version.
+
+`schema.sql` is authoritative for fresh databases. The initializer applies it
+inside a transaction so schema failures roll back together. It rejects existing
+nonempty databases without version metadata and rejects unsupported versions.
+It does not perform migrations or validate/repair arbitrary hand-edited schemas.
+An initialization failure can leave an empty database file, which can be retried.
+Generated `.db`, `.sqlite`, `.sqlite3`, and their journal/WAL/SHM files are ignored;
+`schema.sql` remains tracked source. Database backups and raw files must be kept
+separately from Git as appropriate.
+
+### Schema and Design Choices
+
+| Table | Responsibility |
+| --- | --- |
+| `schema_metadata` | Singleton row holding schema version 1 and timestamps |
+| `source_artifacts` | Paths, filenames, optional SHA-256 and original timestamps for raw material |
+| `test_runs` | Sessions, optional primary artifact, build labels, profile, and result |
+| `events` | Structured runtime evidence with direct artifact and optional line/run references |
+| `errors` | Actual errors, exceptions, and fatal messages, including full stack traces |
+| `entities` | Named research subjects; no automatic entity discovery |
+| `findings` | Conclusions with confidence, status, subject, and optional provenance |
+| `unknowns` | Open questions, importance, status, and required evidence |
+| `decisions` | Intentional choices and reasons, optionally linked to a supporting finding |
+| `relationships` | Directed, typed entity-to-entity links with optional provenance |
+
+All tables have integer primary keys. Foreign keys use `ON DELETE RESTRICT`:
+deleting an artifact, session, entity, or finding cannot silently orphan records
+that reference it. Indexes cover foreign keys, artifact lines/hashes, event
+categories, and common research status queries.
+
+Events and errors require a raw source artifact; a run and source line can be
+absent. Lines, when provided, must be positive integers. A finding's line also
+requires its artifact reference. Findings otherwise permit incomplete provenance
+and default to `confidence='unknown'`; applications must not interpret mere
+storage as verification. A session's primary artifact need not be the event's
+artifact, since one session may eventually involve multiple files.
+
+`decisions.finding_id` is an optional addition to the suggested fields, preserving
+a direct finding-to-decision link. Multiple evidence/decision support links are
+deferred. No conclusions or transitions between these record types happen
+automatically.
+
+Controlled enums use CHECK constraints. Test results are `PASS`,
+`NEEDS_ATTENTION`, `FAIL`, `INCOMPLETE`, and `UNKNOWN`; a future importer must map
+analyzer verdicts explicitly. Error severity is `ERROR`, `EXCEPTION`, or `FATAL`;
+routine warnings can eventually be structured events. Entity types, relationship
+types, profiles, components, and event categories remain extensible text.
+
+Hashes are optional 64-character hexadecimal strings, indexed but not unique:
+identical bytes may legitimately appear at different paths. Phase 1 does not
+hash or import files. Entity names/canonical names are also not forced unique
+because build and namespace identity rules have not been established.
+
+Database-generated timestamps are UTC ISO-style TEXT ending in `Z`. Source
+timestamps are optional TEXT so original precision/offsets or time-only values
+can be retained. `source_artifacts.created_at` denotes the optional original
+artifact creation time; `imported_at` records insertion time. Writers must update
+`updated_at` and `resolved_at` explicitly as appropriate; no automatic update
+triggers or research-status transitions are installed. Stack traces use TEXT
+with no application-imposed truncation or newline normalization.
+
+### Connection Lifecycle
+
+`database.db` provides `resolve_database_path`, `database_exists`,
+`connect_database`, and `initialize_database`. `database_exists` checks only for
+a file, not schema validity, and has no write side effects. `connect_database`
+opens an existing file by default, preventing accidental creation from a typo.
+Its `create=True` option permits an empty file but does not create the schema.
+
+Every helper-opened connection enables foreign keys and uses `sqlite3.Row`.
+The caller owns transaction commit/rollback and connection closure. A connection
+context commits on success and rolls back on an exception; it does not close the
+connection, so use `contextlib.closing` as shown below. Initialization owns and
+closes its own connection. No WAL or other performance tuning is applied.
+
+```python
+from contextlib import closing
+from database.db import connect_database
+
+with closing(connect_database()) as connection:
+    rows = connection.execute(
+        "SELECT question FROM unknowns WHERE status = ?", ("open",)
+    ).fetchall()
+    # For future writes, use `with connection:` and parameterized SQL values.
+```
+
+### Tests and Phase Boundary
+
+All database tests use temporary directories/databases, including CLI tests.
+
+```bash
+python -m unittest discover -s tests -p test_database.py -v
+python -m unittest discover -s tests -p test_analyzer.py -v
+python -m unittest discover -s tests -v
+```
+
+Phase 1 adds 18 database tests to the 26 existing analyzer tests. Database tests
+cover schema creation and idempotency, foreign keys, representative insert/read
+operations, provenance joins, a 2,000-frame multiline trace, constraints,
+transactions, path resolution, CLI behavior, and incompatible versions.
+
+Phase 2 requires a separate instruction before connecting logs/analyzer outputs
+to database records. Ingestion, deduplication/upserts, verdict mapping, hashing,
+and any evidence-to-finding workflow are intentionally deferred.
+
+## Research Database: Phase 2
+
+SQLite is an **optional additional output**. Without `--database`, analysis does
+not import SQLite modules, hash logs, open a database, or attempt persistence.
+The existing profile, report, JSON/CSV, and 6,000-character brief behavior remains
+unchanged. The brief is never registered or imported as evidence.
+
+From `HylandHeatLogAnalyzer/`:
+
+```bash
+python -m database.init_db --database data/hylandheat.db
+python hyland_heat_log_analyzer.py "/path/to/log.log" \
+    --profile read-only-audit --brief --output reports \
+    --database data/hylandheat.db
+python -m database.inspect_db --database data/hylandheat.db --latest-run
+```
+
+Initialization is automatic if the requested database does not exist. Existing
+databases are version-checked without running schema creation or migrations.
+Incompatible databases fail clearly rather than being recreated. Database paths
+remain project-relative; report paths keep their existing working-directory rule.
+Report destinations cannot overwrite the requested database or the source log.
+
+### Integration and Capture
+
+`analyze(..., capture=...)` optionally feeds the already parsed lines into
+`analysis_capture.AnalysisCapture`. This module has no SQLite dependency. The
+ordinary result/report structures remain unchanged. After analysis and report
+generation, the CLI passes that result and completed capture to
+`database.ingestion.persist_analysis`. SQL lives only in the database package.
+
+Optional capture calculates SHA-256 once in a streaming binary pass, then the
+normal parser reads the log once. Capture collects uncapped consecutive .NET
+stack frames during that parse, including repeated errors with different traces
+and original newline sequences. Recognized inner-exception and end-of-stack
+markers are retained. The existing report's first-stack/40-frame selection does
+not limit database storage. Warning-level exception traces remain warning-event
+provenance instead of being promoted to real errors. Unrecognized multiline
+formats remain a parser limitation; raw files remain authoritative.
+
+Source file identity, size, mtime, and ctime are checked around hashing, parsing,
+and persistence. Changing logs are rejected; run ingestion after the game/log is
+closed. These checks detect ordinary changes, not adversarial file replacement.
+UTF-8 decoding errors still use replacement characters in structured text; the
+hash always describes the original bytes.
+
+### Records, Deduplication, and Atomicity
+
+Only four tables receive imported rows:
+
+- `source_artifacts`: log path/name and content SHA-256. Original creation time
+  stays null because filesystem modification time is not creation time.
+- `test_runs`: first observed timestamp, selected profile, and mapped result.
+  `PASS` maps to `PASS`, `NEEDS ATTENTION` to `NEEDS_ATTENTION`, and `INCONCLUSIVE`
+  to `INCOMPLETE`. The original verdict is also retained in notes. Game/mod build
+  fields remain null rather than being guessed.
+- `events`: one row per unique non-error message already selected by the analyzer,
+  including warnings and diagnostics. Unclassified raw chatter is not stored.
+- `errors`: one row per actual ERROR/EXCEPTION/FATAL occurrence, with its complete
+  recognized stack. Expected deployment gates remain ordinary classified events.
+
+An import identity is **content SHA-256 + profile + importer version + analysis
+JSON schema version**. Repeating that identity returns the existing artifact/run
+IDs and stored counts with `Duplicate import: yes`; it does not append rows.
+Byte-identical copies share the first artifact's path/name. A different profile
+creates a separate run against that artifact; changed bytes create a new artifact.
+Importer version changes must be intentional when storage semantics change.
+
+One `BEGIN IMMEDIATE` transaction covers duplicate checking, artifact registration,
+run creation, events, errors, and provenance notes. Any insertion failure rolls
+back the entire import. Schema initialization is separate and can leave an empty
+initialized database after an import failure. Report files are independent outputs:
+if persistence fails, generated reports may remain, but the CLI exits with error
+code 2 and does not claim database success.
+
+### Provenance Without a Schema Change
+
+Schema v1 has a single `source_line` and category per event, with no occurrence
+count, category-list, or stack-line columns. The primary category uses the existing
+analyzer taxonomy; actual lifecycle classifications become `event_type` values.
+`component` uses the innermost available leading logger tag, or null.
+
+The first source line stays directly queryable on each event. To preserve the
+remaining information without changing schema, `test_runs.notes` contains a
+versioned JSON import manifest:
+
+- `importer`, `analysis_schema`, `original_verdict`, and `analyzed_path` identify
+  the import and its interpretation.
+- `events`, keyed by database event ID, retain all categories, severity, count,
+  last line, and each occurrence's source line/timestamp. Warning traces are
+  retained with their occurrence when present.
+- `errors`, keyed by database error ID, retain full stack source-line references;
+  stack text itself lives in `errors.stack_trace`.
+- `transitions` retains all actual transition occurrences and BEFORE/AFTER
+  fields/source references from the analyzer.
+- `expected_rejection_lines` preserves the analyzer's expected-gate assessment.
+
+This manifest is structured provenance, not a research conclusion or an AI brief.
+It is intentionally not a generic repository abstraction. Future SQL queries
+that need indexed repeated occurrences or multiple categories may justify an
+explicit migration; none is implemented here. Memory usage with optional capture
+scales with recognized occurrences and full traces, not just unique messages.
+
+### Inspection and Validation
+
+`database.inspect_db` opens SQLite in URI `mode=ro`, validates schema version,
+and prints counts. It neither creates missing databases nor imports data.
+`--latest-run` shows the latest inserted run, its profile/result, source, and counts.
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+There are 26 original analyzer tests, 18 Phase 1 database tests, and 19 Phase 2
+tests. The real-audit regression is optional because private logs are not copied
+into the project. To include it, provide the saved audit path:
+
+```bash
+HYLAND_HEAT_AUDIT_LOG="/path/to/saved/audit/Latest.log" \
+    python -m unittest discover -s tests -v
+```
+
+That test checks the attention verdict, expected gate, real errors, brief cap,
+all retained original source references, and database provenance. Other Phase 2
+tests use temporary controlled fixtures and cover SHA-256, deduplication,
+rollback, complete/repeated stacks, optional CLI behavior, report-byte equivalence,
+incompatible schemas, source changes, and read-only inspection.
+
+Phase 3 is not implemented: no research-note import, entity discovery, automatic
+findings/unknowns/decisions, assembly/source scanning, patrol ingestion, FTS,
+embeddings, vector search, RAG, context builder, MCP, or LLM/model integration.

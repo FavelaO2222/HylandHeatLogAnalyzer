@@ -1,0 +1,92 @@
+"""Thin connection and initialization helpers for the independent research store."""
+
+from contextlib import closing
+from pathlib import Path
+import sqlite3
+from typing import Optional, Union
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SCHEMA_PATH = Path(__file__).resolve().with_name('schema.sql')
+SCHEMA_VERSION = 1
+DatabasePath = Optional[Union[str, Path]]
+
+
+def resolve_database_path(database: DatabasePath = None) -> Path:
+    """Relative database paths always belong to the analyzer project, not cwd."""
+    path = Path(database if database is not None else 'data/hylandheat.db').expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path.resolve()
+
+
+def database_exists(database: DatabasePath = None) -> bool:
+    """Check for a file without creating anything; does not validate its schema."""
+    return resolve_database_path(database).is_file()
+
+
+def connect_database(database: DatabasePath = None, *, create: bool = False,
+                     read_only: bool = False) -> sqlite3.Connection:
+    """Open an existing database; callers own commit/rollback and close.
+
+    Use initialize_database to create the schema first; create=True only permits
+    creating an empty SQLite file. The connection context manager
+    commits or rolls back transactions but does NOT close the connection.
+    """
+    path = resolve_database_path(database)
+    if create and read_only:
+        raise ValueError('Cannot create a database through a read-only connection.')
+    mode = 'ro' if read_only else 'rwc' if create else 'rw'
+    connection = sqlite3.connect(path.as_uri() + '?mode=' + mode, uri=True, isolation_level='DEFERRED')
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute('PRAGMA foreign_keys = ON')
+        if connection.execute('PRAGMA foreign_keys').fetchone()[0] != 1:
+            raise RuntimeError('SQLite foreign key enforcement could not be enabled.')
+    except Exception:
+        connection.close()
+        raise
+    return connection
+
+
+def _check_version(connection: sqlite3.Connection) -> None:
+    tables = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")}
+    if not tables:
+        return
+    if 'schema_metadata' not in tables:
+        raise ValueError('Refusing to initialize a nonempty, unversioned database.')
+    versions = connection.execute('SELECT id, schema_version FROM schema_metadata').fetchall()
+    if len(versions) != 1 or tuple(versions[0]) != (1, SCHEMA_VERSION):
+        raise ValueError('Unsupported or invalid schema version; a migration is required.')
+
+
+def initialize_database(database: DatabasePath = None) -> Path:
+    """Create schema v1 atomically, or reapply it without removing existing rows."""
+    path = resolve_database_path(database)
+    schema = SCHEMA_PATH.read_text(encoding='utf-8')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(connect_database(path, create=True)) as connection:
+        _check_version(connection)
+        try:
+            # executescript commits any pending transaction before starting, so
+            # BEGIN belongs in the script. DDL and version insertion roll back together.
+            connection.executescript('BEGIN IMMEDIATE;\n' + schema)
+            _check_version(connection)
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+    return path
+
+
+def validate_schema_version(connection: sqlite3.Connection) -> int:
+    """Validate an initialized database without running DDL or migrations."""
+    _check_version(connection)
+    try:
+        row = connection.execute('SELECT schema_version FROM schema_metadata WHERE id=1').fetchone()
+    except sqlite3.Error as exc:
+        raise ValueError('Database is not initialized; schema version metadata is missing.') from exc
+    if row is None or row[0] != SCHEMA_VERSION:
+        raise ValueError('Unsupported or invalid schema version; a migration is required.')
+    return row[0]
