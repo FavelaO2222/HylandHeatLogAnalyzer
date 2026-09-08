@@ -1148,6 +1148,42 @@ rebuilds it from the rows just restored, without ever touching
 migration: a restored v1/v2 backup is entirely unaffected by any of this and
 stays v1/v2, with no FTS5 tables, exactly as before Phase 4B.
 
+### Mod source revision capture (`--mod-repo`)
+
+`test_runs.game_build`/`mod_build` are original schema-v1 `TEXT` columns
+that were never actually populated — every import left them `NULL`, and
+`run_comparison.py` already diffs both as ordinary metadata fields, so
+comparisons pick this up automatically the moment either is set. This is
+the "Git/source-code intelligence" slice from Phase 4A's candidate list:
+`database.source_revision.capture_revision(repo_path)` shells out to `git`
+(read-only — `rev-parse --short HEAD` and `status --porcelain`, never a
+write) and returns `"<short-sha>"`, or `"<short-sha>-dirty"` if the working
+tree has any uncommitted changes (tracked or untracked). A path that isn't
+a working git repository is a clear `ValueError`, the same fail-loud
+convention as everywhere else here, rather than a silently stored `NULL`.
+
+`hyland_heat_log_analyzer.py` exposes it as an optional `--mod-repo PATH`
+flag, only meaningful together with `--database`:
+
+```bash
+python3 hyland_heat_log_analyzer.py session.log --database data/hylandheat.db \
+    --mod-repo /home/oska/RiderProjects/HylandHeat
+```
+
+This records the mod source repo's checked-out commit **at the moment the
+log is analyzed**, not a build-verified guarantee that the currently loaded
+plugin DLL was actually compiled from that exact commit — there is no CI or
+build-time stamping here (yet); it's the best deterministic signal
+available without touching the mod's own build pipeline, which stays out of
+scope for this slice. Omitting `--mod-repo` reproduces exactly the prior
+behavior (`mod_build` stays `NULL`); a duplicate-log import never overwrites
+an existing run's `mod_build`, matching this codebase's usual no-mutation-
+on-dedup rule. `inspect_db --latest-run` shows a `Mod build: <value>` line
+whenever one is set. Not wired into `tools/analyze-after-game.sh` (the
+automatic Steam-launch wrapper) — that script doesn't even pass
+`--database` today; automatic ingestion is its own, separately-scoped
+candidate below.
+
 ### Open threads and remaining Phase 4B candidates (not implemented)
 
 Provenance is explicitly attached and has no removal/status-edit CLI yet.
@@ -1156,10 +1192,12 @@ current catalog and the existing tagged-name extractor. Output is bounded,
 but comparison work and memory scale with stored rows and traces. No semantic
 equivalence, automatic importance/confidence, or causal conclusions are inferred.
 
-Full-text search (above) was the first Phase 4B slice. Remaining candidates
+Full-text search and mod source-revision capture (both above) were Phase
+4B's first two slices. Deeper source intelligence — mapping a stack
+frame's file/line to git blame, or a commit-range diff against a run's
+behavior — remains explicitly out of scope for now. Remaining candidates
 to evaluate separately, still not implemented:
 
-- Git/source-code intelligence and commit ↔ test-run correlation.
 - Manual entity creation and entity aliases with ambiguity handling.
 - Safe, constrained automatic log ingestion with deduplication and explicit scope.
 - Embeddings only after structured and full-text retrieval prove insufficient.
