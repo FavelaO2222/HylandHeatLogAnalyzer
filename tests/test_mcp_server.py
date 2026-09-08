@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 from database import db, mcp_server
 from database.mcp_server import (
-    add_decision, add_finding, add_unknown, backup_database, build_context, configure,
-    inspect_database, list_decisions, list_entities, list_findings, list_unknowns, mcp,
+    add_decision, add_finding, add_relationship, add_unknown, backup_database, build_context, configure,
+    inspect_database, list_decisions, list_entities, list_findings, list_relationships, list_unknowns, mcp,
     sync_entities, update_decision_status, update_finding_status, update_unknown_status,
 )
 
@@ -41,6 +41,13 @@ class McpServerToolTests(unittest.TestCase):
                     'INSERT INTO events (test_run_id, source_artifact_id, category, message) VALUES (?, ?, ?, ?)',
                     (run_id, artifact_id, 'diagnostic_result', 'Name=OfficerLee, Root=OfficerLee'))
         return run_id, artifact_id
+
+    def add_entity(self, name, entity_type='game_object'):
+        with closing(db.connect_database(self.path)) as connection:
+            with connection:
+                return connection.execute(
+                    'INSERT INTO entities (entity_type, name, canonical_name) VALUES (?, ?, ?)',
+                    (entity_type, name, name.lower())).lastrowid
 
     def test_configure_initializes_missing_database(self):
         self.assertTrue(self.path.exists())
@@ -114,6 +121,18 @@ class McpServerToolTests(unittest.TestCase):
         self.assertIn('OfficerLee', list_entities())
         self.assertEqual(list_entities(entity_type='npc'), 'No entities recorded.')
 
+    def test_add_and_list_relationships(self):
+        self.add_entity('OfficerLee2')
+        self.add_entity('OfficerLee')
+        self.assertEqual(add_relationship('IS_CLONE_OF', source_name='OfficerLee2', target_name='OfficerLee'),
+                          'Recorded relationship 1.')
+        self.assertIn('OfficerLee2 IS_CLONE_OF OfficerLee', list_relationships())
+        self.assertEqual(list_relationships(relationship_type='IS_A'), 'No relationships recorded.')
+
+    def test_add_relationship_validation_error_surfaces_real_message(self):
+        self.assertEqual(add_relationship('IS_A', target_name='X'),
+                          'Error: A source entity is required: specify source_entity_id or source_name.')
+
     def test_build_context_reflects_recorded_finding(self):
         run_id, _ = self.seed_run_with_identity_event()
         sync_entities()
@@ -178,6 +197,7 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
             for expected in ('add_finding', 'list_findings', 'update_finding_status',
                              'add_unknown', 'list_unknowns', 'update_unknown_status',
                              'add_decision', 'list_decisions', 'update_decision_status',
+                             'add_relationship', 'list_relationships',
                              'sync_entities', 'list_entities', 'build_context', 'inspect_database',
                              'backup_database'):
                 self.assertIn(expected, names)

@@ -7,7 +7,7 @@ never accepted as a tool argument, so a connected client cannot redirect
 writes to an arbitrary path. Every tool below wraps an existing, already
 validated module function; no new business logic (validation, entity
 resolution, provenance checks) is introduced here, and none of it writes a
-finding/unknown/decision automatically from evidence.
+finding/unknown/decision/relationship automatically from evidence.
 
 Run with: python -m database.mcp_server [--database PATH]
 """
@@ -17,7 +17,8 @@ import sqlite3
 
 from mcp.server.mcpserver import MCPServer
 
-from . import backup, context_builder, entity_extraction, inspect_db, record_decision, record_finding, record_unknown
+from . import (backup, context_builder, entity_extraction, inspect_db, record_decision, record_finding,
+               record_relationship, record_unknown)
 from .db import database_exists, initialize_database, resolve_database_path
 
 mcp = MCPServer('hyland-heat-research-db')
@@ -173,6 +174,37 @@ def sync_entities(run_id: int | None = None) -> str:
 def list_entities(entity_type: str | None = None) -> str:
     """List cataloged entities, optionally filtered by entity_type (e.g. 'game_object')."""
     return _safely(lambda: entity_extraction.format_entities(entity_extraction.list_entities(_db(), entity_type)))
+
+
+@mcp.tool()
+def add_relationship(relationship_type: str, source_entity_id: int | None = None,
+                     source_name: str | None = None, target_entity_id: int | None = None,
+                     target_name: str | None = None, source_artifact_id: int | None = None,
+                     test_run_id: int | None = None, notes: str | None = None) -> str:
+    """Record a new directed, typed entity-to-entity relationship (a deliberate human judgment
+    call, never inferred from evidence), e.g. relationship_type='IS_CLONE_OF'. Both a source and a
+    target entity are required — each may be given as *_entity_id or resolved from *_name by exact
+    case-insensitive entity name/canonical_name match, failing clearly if ambiguous or unmatched.
+    Unlike findings/unknowns/decisions, relationships have no status/lifecycle column in the
+    schema, so there is no update-status tool for this.
+    """
+    def action():
+        relationship_id = record_relationship.add_relationship(
+            _db(), relationship_type, source_entity_id=source_entity_id, source_name=source_name,
+            target_entity_id=target_entity_id, target_name=target_name, source_artifact_id=source_artifact_id,
+            test_run_id=test_run_id, notes=notes)
+        return f'Recorded relationship {relationship_id}.'
+    return _safely(action)
+
+
+@mcp.tool()
+def list_relationships(relationship_type: str | None = None, entity_id: int | None = None) -> str:
+    """List recorded relationships, optionally filtered by exact relationship_type and/or one
+    entity_id appearing as either the source or the target."""
+    return _safely(lambda: '\n'.join(
+        record_relationship.format_relationship_row(row)
+        for row in record_relationship.list_relationships(_db(), relationship_type, entity_id)
+    ) or 'No relationships recorded.')
 
 
 @mcp.tool()

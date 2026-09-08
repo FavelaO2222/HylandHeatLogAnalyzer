@@ -14,7 +14,7 @@ import sqlite3
 import sys
 
 from .db import connect_database, validate_schema_version
-from .research_records import require_row, resolve_subject_entity
+from .research_records import require_row, resolve_entity_name
 
 CONFIDENCE_LEVELS = ('confirmed', 'strong', 'tentative', 'unknown')
 STATUSES = ('active', 'superseded', 'disproven')
@@ -35,7 +35,7 @@ def add_finding(database, finding, *, confidence='unknown', subject_entity_id=No
         with connection:
             connection.execute('BEGIN IMMEDIATE')
             if subject_name is not None:
-                subject_entity_id = resolve_subject_entity(connection, subject_name)
+                subject_entity_id = resolve_entity_name(connection, subject_name)
             require_row(connection, 'entities', subject_entity_id, 'entity')
             require_row(connection, 'source_artifacts', source_artifact_id, 'source artifact')
             require_row(connection, 'test_runs', test_run_id, 'test run')

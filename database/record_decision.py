@@ -14,7 +14,7 @@ import sqlite3
 import sys
 
 from .db import connect_database, validate_schema_version
-from .research_records import require_row, resolve_subject_entity
+from .research_records import require_row, resolve_entity_name
 
 STATUSES = ('active', 'superseded', 'reversed')
 
@@ -31,7 +31,7 @@ def add_decision(database, topic, decision, reason, *, subject_entity_id=None, s
         with connection:
             connection.execute('BEGIN IMMEDIATE')
             if subject_name is not None:
-                subject_entity_id = resolve_subject_entity(connection, subject_name)
+                subject_entity_id = resolve_entity_name(connection, subject_name)
             require_row(connection, 'entities', subject_entity_id, 'entity')
             require_row(connection, 'findings', finding_id, 'finding')
             return connection.execute(

@@ -13,7 +13,7 @@ import sqlite3
 import sys
 
 from .db import connect_database, validate_schema_version
-from .research_records import require_row, resolve_subject_entity
+from .research_records import require_row, resolve_entity_name
 
 IMPORTANCE_LEVELS = ('low', 'medium', 'high', 'critical')
 STATUSES = ('open', 'investigating', 'resolved', 'blocked')
@@ -32,7 +32,7 @@ def add_unknown(database, question, *, importance='medium', subject_entity_id=No
         with connection:
             connection.execute('BEGIN IMMEDIATE')
             if subject_name is not None:
-                subject_entity_id = resolve_subject_entity(connection, subject_name)
+                subject_entity_id = resolve_entity_name(connection, subject_name)
             require_row(connection, 'entities', subject_entity_id, 'entity')
             return connection.execute(
                 '''INSERT INTO unknowns (subject_entity_id, question, importance, required_evidence, related_feature)

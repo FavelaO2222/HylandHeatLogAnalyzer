@@ -444,6 +444,7 @@ CREATE TABLE relationships (
     notes TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
+INSERT INTO "relationships" VALUES(1,2,'IS_CLONE_OF',1,1,NULL,'Matched SceneId; see finding 1','2026-09-08T04:42:17.409Z');
 CREATE TABLE schema_metadata (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     schema_version INTEGER NOT NULL CHECK (schema_version >= 1),

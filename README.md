@@ -548,14 +548,16 @@ This still creates no findings, unknowns, decisions, or relationships, and
 recognizes nothing beyond that fixed key list — a differently named or
 differently tagged identifier is left uncatalogued rather than guessed at.
 
-### Recording findings, unknowns, and decisions
+### Recording findings, unknowns, decisions, and relationships
 
-`database/record_finding.py`, `record_unknown.py`, and `record_decision.py`
-are manual CLIs for the three record types the project deliberately keeps as
-human judgment calls rather than something inferred from evidence. All three
-share the same entity-resolution and foreign-key validation logic, factored
-into `database/research_records.py` so a behavior change only has to happen
-once. Each has three subcommands: `add`, `list`, and `update-status`.
+`database/record_finding.py`, `record_unknown.py`, `record_decision.py`, and
+`record_relationship.py` are manual CLIs for the four record types the
+project deliberately keeps as human judgment calls rather than something
+inferred from evidence. All four share the same entity-resolution and
+foreign-key validation logic, factored into `database/research_records.py`
+so a behavior change only has to happen once. The first three each have
+three subcommands (`add`, `list`, `update-status`); relationships have only
+`add` and `list` — see [Relationships](#relationships) below for why.
 
 #### Findings
 
@@ -631,6 +633,35 @@ decision from a finding automatically. `update-status` moves a decision
 through `active` / `superseded` / `reversed`; the decision text itself is
 never edited in place.
 
+#### Relationships
+
+`database/record_relationship.py` follows the same shape, with two
+differences the `relationships` table's own design forces: **both** a
+source and a target entity are required (there is no freeform fallback at
+all, since the table has no `subject_text`-equivalent column), and the
+schema gives relationships **no status/lifecycle column** — a relationship
+is recorded once and either holds or doesn't, so there is no
+`update-status` subcommand here, only `add` and `list`.
+
+```bash
+python -m database.record_relationship --database data/hylandheat.db add \
+    --relationship-type IS_CLONE_OF --source-name OfficerLee2 --target-name OfficerLee \
+    --notes "Matched SceneId; see finding 1" --source-artifact-id 1
+python -m database.record_relationship --database data/hylandheat.db list
+python -m database.record_relationship --database data/hylandheat.db list --relationship-type IS_CLONE_OF
+python -m database.record_relationship --database data/hylandheat.db list --entity-id 2
+```
+
+`--relationship-type` is any non-empty string (e.g. `IS_CLONE_OF`, `IS_A`,
+`OWNS`) — the schema only requires it non-empty, not a fixed enum. Each side
+takes `--source-entity-id`/`--source-name` or `--target-entity-id`/
+`--target-name` (each pair mutually exclusive, and the CLI requires exactly
+one from each pair — argparse itself enforces this, in addition to the same
+check in `add_relationship()` for callers that skip the CLI, like the MCP
+tool). `list --entity-id` shows every relationship where that entity id
+appears as either the source or the target, useful for asking "what do we
+know about this entity" without knowing directionality up front.
+
 ### MCP server
 
 `database/mcp_server.py` exposes the database to a connected MCP client (an
@@ -669,22 +700,28 @@ validated module function — `add_finding`, `list_findings`,
 `update_finding_status` (`record_finding.py`); `add_unknown`,
 `list_unknowns`, `update_unknown_status` (`record_unknown.py`);
 `add_decision`, `list_decisions`, `update_decision_status`
-(`record_decision.py`); `sync_entities`, `list_entities`
+(`record_decision.py`); `add_relationship`, `list_relationships`
+(`record_relationship.py`); `sync_entities`, `list_entities`
 (`entity_extraction.py`); `build_context` (`context_builder.py`);
 `inspect_database` (`inspect_db.py`); and `backup_database` (`backup.py`;
 see [Backup and restore](#backup-and-restore)) — so no new validation,
 entity-resolution, or provenance-checking logic exists here, and nothing
-here writes a finding/unknown/decision automatically from evidence.
+here writes a finding/unknown/decision/relationship automatically from
+evidence.
 A validation error (e.g. an unresolvable `subject_name`, an unknown
 `finding_id`) is caught and returned as the tool's own concise error text
 (the same wording the CLI prints), rather than the SDK's generic "Error
 executing tool X", so a connected assistant can see exactly what to correct.
 
-`findings`, `unknowns`, and `decisions` all now have both a CLI and MCP
-tools; only `entities`/`relationships` are limited to `entity_extraction.py`'s
-heuristic catalog and hand-written SQL, respectively (`relationships` has no
-tooling at all yet). Phase 3 still has no research-note import, assembly/
-source scanning, patrol ingestion, FTS, embeddings, vector search, or RAG.
+`findings`, `unknowns`, `decisions`, and `relationships` all now have both a
+CLI and MCP tools; only `entities` remains limited to
+`entity_extraction.py`'s heuristic catalog — there is still no manual "add
+an entity by hand" CLI. Every other CLI here only resolves an existing
+entity by name/ID; none of them create one, so a relationship (or a
+finding/unknown/decision subject) can only reference an entity the catalog
+or a person has already added directly. Phase 3 still has no research-note
+import, assembly/source scanning, patrol ingestion, FTS, embeddings, vector
+search, or RAG.
 
 ## Backup and restore
 

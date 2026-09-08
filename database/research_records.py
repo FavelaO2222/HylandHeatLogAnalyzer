@@ -7,7 +7,7 @@ behavior change (wording, ambiguity handling) only needs to happen once.
 """
 
 
-def resolve_subject_entity(connection, name):
+def resolve_entity_name(connection, name):
     """Resolve `name` to an existing entity id by exact case-insensitive name/canonical_name match.
 
     Raises ValueError if it matches zero or more than one entity, rather than guessing.
