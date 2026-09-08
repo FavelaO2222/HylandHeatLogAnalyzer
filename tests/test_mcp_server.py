@@ -222,7 +222,7 @@ class McpServerToolTests(unittest.TestCase):
 
     def test_rebuild_search_index(self):
         self.seed_run_with_identity_event()
-        self.assertEqual(rebuild_search_index(), 'Rebuilt search index: 1 events, 0 errors indexed.')
+        self.assertEqual(rebuild_search_index(), 'Rebuilt search index: 1 events, 0 errors, 0 documents indexed.')
         self.assertEqual(len(search('OfficerLee')['items']), 1)
 
     def test_backup_database_error_surfaces_real_message(self):

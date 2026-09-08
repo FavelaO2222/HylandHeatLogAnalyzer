@@ -301,13 +301,17 @@ def backup_database() -> str:
 
 @mcp.tool(structured_output=True)
 def search(query: str, type: str | None = None, limit: int = 20) -> dict[str, object]:
-    """Ranked full-text search over ingested events/errors (SQLite FTS5, bm25 ranking). Requires schema v3.
+    """Ranked full-text search over events/errors/source documents (SQLite FTS5, bm25 ranking). Requires schema v4.
 
-    type restricts to 'events' or 'errors' (default: both). limit is 1-100.
-    Each item has source ('event'/'error'), id, test_run_id, source_line, kind
-    (event category or error severity), component, a highlighted snippet, and
-    the bm25 score (lower is a better match). No embeddings or semantic
-    ranking; this is exact-term/prefix matching over stored text only.
+    type restricts to 'events', 'errors', or 'documents' (default: all three).
+    limit is 1-100. Each item has source ('event'/'error'/'document'), id,
+    either test_run_id/source_line (events/errors, tracing a match back to
+    the run and log line it came from) or relative_path (documents -- ingested
+    mod source or decompiled game-assembly files, see database.ingest_source),
+    kind (event category or error severity, None for documents), component, a
+    highlighted snippet, and the bm25 score (lower is a better match). No
+    embeddings or semantic ranking; this is exact-term/prefix matching over
+    stored text only.
     """
     try:
         return fts_search.search(_db(), query, type=type, limit=limit)
@@ -317,15 +321,18 @@ def search(query: str, type: str | None = None, limit: int = 20) -> dict[str, ob
 
 @mcp.tool()
 def rebuild_search_index() -> str:
-    """Recompute the FTS5 search index from current events/errors content. Requires schema v3.
+    """Recompute the FTS5 search index from current events/errors/documents content. Requires schema v4.
 
     Triggers keep the index live on ordinary writes; use this to repair drift
     from a write that bypassed them, or after restoring from a SQL backup
-    (which excludes the index -- see database.backup's docstring).
+    (which excludes the index -- see database.backup's docstring). Only
+    rebuilds the *index*; source_documents' own content, if empty after a
+    restore, can only come from re-running database.ingest_source.
     """
     def action():
         result = fts_search.rebuild_search_index(_db())
-        return f"Rebuilt search index: {result['events_indexed']} events, {result['errors_indexed']} errors indexed."
+        return (f"Rebuilt search index: {result['events_indexed']} events, {result['errors_indexed']} errors, "
+                f"{result['documents_indexed']} documents indexed.")
     return _safely(action)
 
 

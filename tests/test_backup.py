@@ -11,6 +11,7 @@ from unittest.mock import patch
 from database import db
 from database.backup import dump_database, main, restore_database
 from database.evidence import attach_evidence, list_evidence
+from database.ingest_source import ingest_directory
 from database.search import search
 from phase4_fixtures import create_v1, seed, snapshot
 
@@ -179,7 +180,7 @@ class BackupRestoreTests(unittest.TestCase):
         restored_path = restore_database(Path(self.temp.name) / 'restored.db', self.backup_path)
         with closing(db.connect_database(restored_path)) as restored:
             self.assertEqual(snapshot(restored), before)
-            self.assertEqual(db.validate_schema_version(restored), 3)
+            self.assertEqual(db.validate_schema_version(restored), db.SCHEMA_VERSION)
             with self.assertRaises(sqlite3.IntegrityError), restored:
                 restored.execute('DELETE FROM events WHERE id=1')
             with self.assertRaises(sqlite3.IntegrityError), restored:
@@ -242,6 +243,42 @@ class BackupRestoreTests(unittest.TestCase):
         result = search(restored_path, 'OfficerLee', type='events')
         self.assertEqual([item['id'] for item in result['items']], [1])
         self.assertIn('OfficerLee', result['items'][0]['snippet'])
+
+    def test_dump_excludes_source_documents_entirely(self):
+        # Different rationale from the FTS5 exclusion above (see backup.py's
+        # docstring): source_documents holds full ingested file content --
+        # potentially large, and for decompiled game assemblies, copyrighted
+        # -- so it must never land in this git-tracked dump, regardless of
+        # artifact_type.
+        self.open_database()
+        source = Path(self.temp.name) / 'src'
+        source.mkdir()
+        (source / 'Secret.cs').write_text('class Secret { /* proprietary game logic */ }', encoding='utf-8')
+        ingest_directory(self.path, 'decompiler_export', source)
+        dump_database(self.path, self.backup_path)
+        text = self.backup_path.read_text(encoding='utf-8')
+        self.assertNotIn('source_documents', text)
+        self.assertNotIn('proprietary game logic', text)
+        self.assertNotIn('Secret.cs', text)
+
+    def test_restore_leaves_source_documents_empty_and_reingest_repopulates_search(self):
+        self.open_database()
+        source = Path(self.temp.name) / 'src'
+        source.mkdir()
+        (source / 'A.cs').write_text('void ReingestableMethod() {}', encoding='utf-8')
+        ingest_directory(self.path, 'source_code', source)
+        dump_database(self.path, self.backup_path)
+        restored_path = Path(self.temp.name) / 'restored.db'
+        restore_database(restored_path, self.backup_path)
+        with closing(db.connect_database(restored_path)) as restored:
+            self.assertEqual(restored.execute('SELECT count(*) FROM source_documents').fetchone()[0], 0)
+            tables = {r[0] for r in restored.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn('source_documents', tables)
+            self.assertIn('source_documents_fts', tables)
+        self.assertEqual(search(restored_path, 'ReingestableMethod', type='documents')['items'], [])
+        ingest_directory(restored_path, 'source_code', source)
+        result = search(restored_path, 'ReingestableMethod', type='documents')
+        self.assertEqual(len(result['items']), 1)
 
     def test_v1_restore_stays_v1_with_no_search_index(self):
         # A v1 backup restores as v1, with no FTS5 index -- restore never

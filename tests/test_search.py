@@ -47,6 +47,15 @@ class SearchFixture:
                    VALUES (?, ?, ?, ?, ?, ?)''',
                 (run_id, artifact_id, severity, message, stack_trace, source_line)).lastrowid
 
+    def document(self, relative_path, content, *, language='csharp'):
+        with self.connection:
+            artifact_id = self.connection.execute(
+                "INSERT INTO source_artifacts (artifact_type, path, filename) VALUES ('source_code', 'repo', 'repo')"
+            ).lastrowid
+            return self.connection.execute(
+                '''INSERT INTO source_documents (source_artifact_id, relative_path, language, content)
+                   VALUES (?, ?, ?, ?)''', (artifact_id, relative_path, language, content)).lastrowid
+
 
 class SearchFunctionTests(SearchFixture, unittest.TestCase):
     def test_finds_matching_events_and_errors_ranked_by_relevance(self):
@@ -71,11 +80,32 @@ class SearchFunctionTests(SearchFixture, unittest.TestCase):
         run_id = self.run_(artifact_id)
         self.event(run_id, artifact_id, 'shared keyword event')
         self.error(run_id, artifact_id, 'shared keyword error')
+        self.document('Foo.cs', 'class Foo { void shared_keyword_method() {} }')
 
         events_only = search.search(self.path, 'shared', type='events')
         self.assertEqual([item['source'] for item in events_only['items']], ['event'])
         errors_only = search.search(self.path, 'shared', type='errors')
         self.assertEqual([item['source'] for item in errors_only['items']], ['error'])
+        documents_only = search.search(self.path, 'shared', type='documents')
+        self.assertEqual([item['source'] for item in documents_only['items']], ['document'])
+
+    def test_documents_are_found_with_relative_path_and_no_run_context(self):
+        self.document('HylandHeat/Police/PoliceOfficer.cs',
+                      'public void BeginFootPursuit_Networked(string playerCode) { }')
+        result = search.search(self.path, 'BeginFootPursuit', type='documents')
+        item = result['items'][0]
+        self.assertEqual(item['source'], 'document')
+        self.assertEqual(item['relative_path'], 'HylandHeat/Police/PoliceOfficer.cs')
+        self.assertIsNone(item['test_run_id'])
+        self.assertIsNone(item['source_line'])
+        self.assertIn('BeginFootPursuit', item['snippet'])
+
+    def test_events_and_errors_have_no_relative_path(self):
+        artifact_id = self.artifact()
+        run_id = self.run_(artifact_id)
+        self.event(run_id, artifact_id, 'a searchable event')
+        item = search.search(self.path, 'searchable', type='events')['items'][0]
+        self.assertIsNone(item['relative_path'])
 
     def test_no_match_returns_empty_items(self):
         self.artifact()
@@ -152,7 +182,7 @@ class SearchFunctionTests(SearchFixture, unittest.TestCase):
         self.assertEqual(search.search(self.path, 'rebuildable')['items'], [])
 
         summary = search.rebuild_search_index(self.path)
-        self.assertEqual(summary, {'events_indexed': 1, 'errors_indexed': 1})
+        self.assertEqual(summary, {'events_indexed': 1, 'errors_indexed': 1, 'documents_indexed': 0})
         result = search.search(self.path, 'rebuildable')
         self.assertEqual({item['source'] for item in result['items']}, {'event', 'error'})
 
@@ -181,6 +211,15 @@ class SearchCliTests(SearchFixture, unittest.TestCase):
         self.assertIn('1 result(s)', text)
         self.assertIn(f'run #{run_id}', text)
         self.assertIn('line 7', text)
+
+    def test_text_output_for_documents_shows_relative_path(self):
+        self.document('Foo.cs', 'void FindableMethod() {}')
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(search.main(['--database', str(self.path), 'FindableMethod', '--type', 'documents']), 0)
+        text = output.getvalue()
+        self.assertIn('1 result(s)', text)
+        self.assertIn('Foo.cs', text)
 
     def test_json_output(self):
         self.seed_one()
@@ -211,7 +250,7 @@ class SearchCliTests(SearchFixture, unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             self.assertEqual(search.main(['--database', str(self.path), '--rebuild']), 0)
-        self.assertIn('Rebuilt search index: 1 events, 0 errors indexed.', output.getvalue())
+        self.assertIn('Rebuilt search index: 1 events, 0 errors, 0 documents indexed.', output.getvalue())
 
     def test_query_and_rebuild_together_is_an_error(self):
         error = io.StringIO()
