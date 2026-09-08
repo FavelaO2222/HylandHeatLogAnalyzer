@@ -544,8 +544,42 @@ is idempotent (already-cataloged names are reported, not re-inserted).
 This still creates no findings, unknowns, decisions, or relationships, and
 recognizes nothing beyond that fixed key list — a differently named or
 differently tagged identifier is left uncatalogued rather than guessed at.
+
+### Recording findings
+
+`database/record_finding.py` is a manual CLI for the one record type the
+project deliberately keeps as a human judgment call rather than something
+inferred from evidence: findings. It has three subcommands.
+
+```bash
+python -m database.record_finding --database data/hylandheat.db add \
+    --finding "OfficerLee2's copied SceneId maps back to OfficerLee, ruling out an independent clone." \
+    --subject-name OfficerLee2 --confidence strong --source-artifact-id 1 --source-line 262
+python -m database.record_finding --database data/hylandheat.db list
+python -m database.record_finding --database data/hylandheat.db list --status active
+python -m database.record_finding --database data/hylandheat.db update-status 1 superseded
+```
+
+`add` requires only `--finding`; `--confidence` defaults to `unknown` and
+status always starts `active`, matching the schema's own cautious defaults.
+`--subject-name` resolves to an existing entity by exact case-insensitive
+name/`canonical_name` match (built by `entity_extraction.py` or inserted by
+hand) and fails clearly if it matches zero or more than one entity, rather
+than guessing; `--subject-entity-id` links directly by ID instead, and
+`--subject-text` is an independent freeform label that can be combined with
+either. `--source-artifact-id`/`--source-line`/`--test-run-id` are optional
+provenance links, each validated to already exist before the row is written
+(`--source-line` requires `--source-artifact-id`, matching the schema's own
+CHECK constraint, but with a clear message instead of a raw SQLite error).
+`list` joins the linked entity's name in and can filter by `--status`.
+`update-status` moves a finding through the schema's `active` /
+`superseded` / `disproven` lifecycle; the finding text itself is never
+edited in place. Every value is exactly what the caller supplies — nothing
+here derives a finding from stored evidence, and `context_builder.py` already
+surfaces whatever this CLI records.
+
 Phase 3 still has no research-note import, automatic findings/unknowns/decisions
 population, assembly/source scanning, patrol ingestion, FTS, embeddings,
-vector search, RAG, MCP, or LLM/model integration. `findings`/`unknowns`/
-`decisions` still only get populated by hand-written SQL against the schema in
+vector search, RAG, MCP, or LLM/model integration. `unknowns`/`decisions`
+still only get populated by hand-written SQL against the schema in
 [Schema and Design Choices](#schema-and-design-choices).
