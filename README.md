@@ -7,12 +7,30 @@ The one exception is `database/mcp_server.py` (see
 [MCP server](#mcp-server)), which needs the `mcp` package; nothing else in
 this project does.
 
+Current milestone: **Phase 4A — Evidence Provenance and Run Comparison**,
+using database schema v2. See [Phase 4A](#phase-4a-evidence-provenance-and-run-comparison)
+for migration, commands, comparison rules, and the Phase 4B boundary.
+Structured and deterministic retrieval first. Semantic retrieval only where
+exact retrieval eventually proves insufficient.
+
 ## PyCharm and Usage
 
 Open the `HylandHeatLogAnalyzer` folder using PyCharm's **File > Open**. Select an
 installed Python 3.9+ interpreter in the project's Python Interpreter settings.
 Optionally create a virtual environment there, or run `python -m venv .venv` and
 select its interpreter. No packages need installing.
+
+For MCP and the **complete** test suite, use the existing pinned MCP dependency
+in a local environment (Python 3.11+ for the protocol tests; verified on 3.12):
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-mcp.txt
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+The checked-in `.mcp.json` launches this environment's interpreter. The analyzer
+and non-MCP database commands still need only the standard library.
 
 From the terminal in this folder (`python3` also works on Linux):
 
@@ -174,7 +192,8 @@ timeline, comparison, and test-specific evidence extraction features.
 ## Research Database: Phase 1
 
 This section records the Phase 1 foundation. Optional analyzer ingestion is now
-implemented in Phase 2, documented below; the schema remains version 1.
+implemented in Phase 2, documented below. This section describes historical
+schema v1; Phase 4A adds the explicit v1 -> v2 migration described below.
 
 ### Project Structure Found
 
@@ -253,15 +272,15 @@ PYTHONPATH="/path/to/HylandHeatLogAnalyzer" python -m database.init_db --databas
 ```
 
 Initialization prints the resolved database path and version, and returns exit
-code 0. Errors print a concise message to stderr and return 2. Reinitializing
-version 1 creates any missing schema objects without deleting existing rows or
-resetting the schema metadata timestamps. No test or research data is inserted;
-the only initial row is the schema version.
+code 0. Errors print a concise message to stderr and return 2. Initialization
+now creates schema v2 or explicitly upgrades v1, preserving existing data.
+Reapplying v2 preserves metadata timestamps. No sample or research data is inserted.
 
 `schema.sql` is authoritative for fresh databases. The initializer applies it
 inside a transaction so schema failures roll back together. It rejects existing
 nonempty databases without version metadata and rejects unsupported versions.
-It does not perform migrations or validate/repair arbitrary hand-edited schemas.
+It supports the additive v1 -> v2 migration, but does not validate/repair arbitrary
+hand-edited schemas or migrate unknown versions.
 An initialization failure can leave an empty database file, which can be retried.
 Generated `.db`, `.sqlite`, `.sqlite3`, and their journal/WAL/SHM files are ignored;
 `schema.sql` remains tracked source. Database backups and raw files must be kept
@@ -271,7 +290,7 @@ separately from Git as appropriate.
 
 | Table | Responsibility |
 | --- | --- |
-| `schema_metadata` | Singleton row holding schema version 1 and timestamps |
+| `schema_metadata` | Singleton row holding schema version and timestamps |
 | `source_artifacts` | Paths, filenames, optional SHA-256 and original timestamps for raw material |
 | `test_runs` | Sessions, optional primary artifact, build labels, profile, and result |
 | `events` | Structured runtime evidence with direct artifact and optional line/run references |
@@ -281,6 +300,7 @@ separately from Git as appropriate.
 | `unknowns` | Open questions, importance, status, and required evidence |
 | `decisions` | Intentional choices and reasons, optionally linked to a supporting finding |
 | `relationships` | Directed, typed entity-to-entity links with optional provenance |
+| `evidence_links` (v2) | Explicit finding/unknown/decision references to runs, events, errors, entities, or relationships |
 
 All tables have integer primary keys. Foreign keys use `ON DELETE RESTRICT`:
 deleting an artifact, session, entity, or finding cannot silently orphan records
@@ -295,9 +315,9 @@ storage as verification. A session's primary artifact need not be the event's
 artifact, since one session may eventually involve multiple files.
 
 `decisions.finding_id` is an optional addition to the suggested fields, preserving
-a direct finding-to-decision link. Multiple evidence/decision support links are
-deferred. No conclusions or transitions between these record types happen
-automatically.
+a direct finding-to-decision link. Phase 4A adds multiple explicit evidence links
+without replacing it. No conclusions or transitions between these record types
+happen automatically.
 
 Controlled enums use CHECK constraints. Test results are `PASS`,
 `NEEDS_ATTENTION`, `FAIL`, `INCOMPLETE`, and `UNKNOWN`; a future importer must map
@@ -703,8 +723,8 @@ instead of a person running each CLI by hand. This is the project's one
 feature needing a pip dependency:
 
 ```bash
-pip install -r requirements-mcp.txt   # installs mcp==2.2.0; a one-time network step
-python -m database.mcp_server --database data/hylandheat.db
+.venv/bin/python -m pip install -r requirements-mcp.txt   # existing mcp==2.2.0 pin
+.venv/bin/python -m database.mcp_server --database data/hylandheat.db
 ```
 
 Point an MCP client's config at that command (stdio transport, the SDK's
@@ -725,7 +745,7 @@ Claude Code) does:
     "hyland-heat-research-db": {
       "type": "stdio",
       "command": "bash",
-      "args": ["-c", "cd '/absolute/path/to/HylandHeatLogAnalyzer' && exec python3 -m database.mcp_server --database data/hylandheat.db"]
+      "args": ["-c", "cd '/absolute/path/to/HylandHeatLogAnalyzer' && exec .venv/bin/python -m database.mcp_server --database data/hylandheat.db"]
     }
   }
 }
@@ -736,7 +756,7 @@ For Codex, the equivalent goes in `~/.codex/config.toml`:
 ```toml
 [mcp_servers.hyland-heat-research-db]
 command = "bash"
-args = ["-c", "cd '/absolute/path/to/HylandHeatLogAnalyzer' && exec python3 -m database.mcp_server --database data/hylandheat.db"]
+args = ["-c", "cd '/absolute/path/to/HylandHeatLogAnalyzer' && exec .venv/bin/python -m database.mcp_server --database data/hylandheat.db"]
 ```
 
 Claude Code treats a project's `.mcp.json` as untrusted until you approve
@@ -840,3 +860,204 @@ blocking an otherwise-unrelated commit over a database problem. On success
 it runs `dump` and `git add`s the refreshed file into the commit already in
 progress — a standard, well-established hook pattern (the same one
 auto-formatting pre-commit hooks use).
+
+## Phase 4A: Evidence Provenance and Run Comparison
+
+This phase adds explicit provenance and deterministic comparisons to the existing
+SQLite store. No embeddings, vector store, LLM calls, server database, Redis,
+LangChain, or ingestion automation is introduced. See
+[verification and examples](docs/phase4a-verification.md) for the milestone results.
+
+### Evidence model and migration
+
+`database.evidence` exposes a generic `(record_type, record_id, target_type,
+target_id)` API. Record types are `finding`, `unknown`, and `decision`; targets
+are `run`, `event`, `error`, `entity`, and `relationship`. Singular names are
+deliberate; aliases, arbitrary table names, and nonexistent IDs are rejected.
+IDs must be positive SQLite integers. An attachment only stores a reference:
+it never changes confidence, resolves a question, or proves a conclusion.
+Entities and relationships may themselves contain interpretation; linking them
+does not turn them into runtime observations.
+
+Schema v2 adds **one table**, `evidence_links`, with its own ID and `created_at`.
+It uses three nullable owner foreign keys and five nullable target foreign keys.
+CHECK constraints require exactly one owner and exactly one target; all foreign
+keys use `ON DELETE RESTRICT`. This keeps a generic application interface while
+SQLite enforces real references, including during updates and after restore.
+A unique expression index prevents duplicate pairs despite nullable columns;
+indexes on each foreign key support record lookup and deletion checks.
+Repeated attachment is idempotent and returns the existing link ID.
+
+Upgrade explicitly, after saving the existing database:
+
+```bash
+python3 -m database.backup dump --database data/hylandheat.db --backup backups/before-v2.sql
+python3 -m database.init_db --database data/hylandheat.db
+python3 -m database.inspect_db --database data/hylandheat.db
+```
+
+`init_db` creates fresh v2 databases or applies the additive v1 -> v2 change in
+one transaction. Existing table contents, primary keys, research confidence and
+status, and legacy provenance columns are preserved. Only the schema version and
+its `updated_at` change; reapplying v2 is idempotent. Failed migration rolls back.
+Unknown versions and nonempty unversioned databases are rejected.
+
+Existing readers/writers, comparison, and backup/restore continue to support v1.
+Evidence commands require v2 and report the migration command when needed.
+Read-only tools and server startup never migrate an existing database implicitly.
+A restored v1 backup remains v1 until explicitly initialized. Legacy finding
+artifact/run/line columns and `decisions.finding_id` remain independent: there is
+no automatic backfill, transitive expansion, or synthetic attribution.
+
+### Evidence CLI and MCP
+
+Run from the project root; IDs below refer to this repository's live snapshot:
+
+```bash
+python3 -m database.evidence --database data/hylandheat.db attach finding 1 run 1
+python3 -m database.evidence attach finding 1 event 341
+python3 -m database.evidence attach finding 1 relationship 1
+python3 -m database.evidence list finding 1
+python3 -m database.evidence list finding 1 --format json --limit 20 --offset 0
+# Other record types use the same interface, when those IDs exist:
+python3 -m database.evidence attach unknown 1 event 346
+python3 -m database.evidence attach decision 1 event 346
+```
+
+Listing is ordered by evidence-link ID, defaults to 20 links, allows 1–100, and
+returns a total plus `next_offset` for pagination. `attach` also accepts
+`--format json`. Invalid input returns exit code 2 with concise stderr output.
+The reusable functions are `attach_evidence(database, record_type, record_id,
+target_type, target_id)` and `list_evidence(database, record_type, record_id,
+limit=20, offset=0)` (pagination arguments are keyword-only).
+
+The MCP server adds three tools, with a fixed database path at startup:
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `attach_evidence` | `record_type`, `record_id`, `target_type`, `target_id` | Link ID and explicit pair |
+| `list_evidence` | `record_type`, `record_id`, optional `limit`, `offset` | `total`, `items`, `next_offset` |
+| `compare_runs` | `run_a`, `run_b`, optional `limit` | Structured comparison described below |
+
+These tools return JSON objects in MCP `structuredContent`, with JSON text for
+clients consuming text content. Application validation errors return an object
+with an `error` field, following the existing convention of exposing actionable
+validation messages (older tools still return error text). No new tool accepts
+a database path. Restart the client/server after updating to load the new tools.
+
+### Deterministic comparison
+
+```bash
+python3 -m database.run_comparison 1 2 --database data/research.db
+python3 -m database.run_comparison 1 2 --database data/research.db --format json --limit 5
+python3 -m database.run_comparison 1 1 --database data/hylandheat.db
+```
+
+Both IDs must already exist. A and B are directional: added means present in B
+and absent from A; removed means present in A and absent from B. Reusable Python:
+
+```python
+from database.run_comparison import compare_runs, format_comparison
+result = compare_runs(1, 2, database="data/research.db", limit=5)
+print(format_comparison(result))
+```
+
+The service reads one consistent SQLite snapshot and never reads raw files,
+ingests anything, or writes research records. Matching rules are explicit:
+
+- Metadata compares profile, stored result, start time, game/mod builds, source
+  artifact ID/path/hash, known importer verdict, and non-manifest notes. Database
+  insertion timestamps and the other import-manifest fields are excluded.
+- Errors match exact `(severity, component, message, stack_trace)`. Error counts
+  are stored row counts. Stack-only changes are therefore visible.
+- Events match exact `(category, component, event_type, message)`. All stored
+  categories participate; display order follows ingestion's `PRIMARY_CATEGORIES`.
+  Repeated occurrences use positive integer counts in the recognized importer
+  manifest (`analysis_schema=2`), otherwise one per stored row. Coverage reports
+  how many event rows lack a usable repeat count. Counts group by category/type
+  as well as full signature; no confidence or verdict is recalculated.
+- IDs, source lines, and timestamp columns are excluded from error/event
+  signature matching. Embedded message values are not normalized or guessed.
+  `NULL` and empty text remain distinct. One representative row ID on each side
+  lets the reader retrieve the full stored record.
+- Entity presence means an unambiguous cataloged `game_object` name explicitly
+  tagged in stored event/error messages using the existing identity-key extractor.
+  Matching name/canonical_name is case-insensitive; unmatched/ambiguous names are
+  excluded and counted in coverage. Bare mentions, other entity types, and
+  research relationships do not establish run presence. This describes tagged
+  evidence, **not actual spawning, destruction, or lifecycle identity**.
+
+JSON contains metadata differences, total row/occurrence/entity counts, error and
+event `added`/`removed`/`count_changes`, category/type count changes, entity
+differences, and coverage. Every difference list has `total`, `items`, and
+`omitted`. Default `--limit 8` applies independently to each list, with a hard
+maximum of 100; all text previews are at most 240 characters. Full values are
+compared before truncation and signature SHA-256 values distinguish previews
+that look alike. Ordering has deterministic tie-breaks. `identical` reflects
+the full comparison under these documented rules, even when display is capped;
+it does not mean the raw logs or entire database rows are identical.
+
+Example compact excerpt from controlled synthetic runs:
+
+```text
+Run comparison: #1 -> #2
+error_rows: 1 -> 0 (-1)
+Errors removed: [ERROR] Synthetic failure Name=Old
+Entities added: New
+Entities removed: Old
+```
+
+The live snapshot currently has only one real run. Comparing `1 1` reports no
+differences, 350 event rows / 361 occurrences, one error, and 18 tagged entities.
+Two-run differences are exercised with isolated synthetic fixtures; no second
+real run is invented or added to the research database.
+
+### Context and backup changes
+
+Both context modes show explicit attached evidence directly under included
+findings, unknowns, and decisions, for example:
+
+```text
+- [active, strong] OfficerLee2's copied SceneId maps back to OfficerLee ...
+  Evidence (finding #1): Run #1; Event #341; Event #346; Relationship #1
+```
+
+At most six references per record are shown in attachment-ID order, with a
+remaining-count marker pointing to `list_evidence`. Record text and its evidence
+line are admitted to the character budget together; evidence is not silently
+removed from an included record. No raw messages or transitive links expand here.
+The `--max-chars` cap now also covers oversized headers/paths/descriptions and
+very small positive budgets. A truncation marker is included whenever it fits;
+invalid budgets and negative row limits are rejected. Existing ranking, status
+filters, and scope remain unchanged.
+
+SQL backups include the new table and indexes. Foreign-key checks reject
+dangling evidence before dump and after restore. Dumps now use a consistent
+read transaction and atomically replace the destination, preserving an older
+backup on write/replace failure. A backup cannot overwrite its source database
+or a hardlink alias. Restore still refuses existing targets, with exclusive
+file creation also protecting against concurrent creation. The installed
+pre-commit hook continues to refresh and stage the tracked SQL dump; its existing
+non-blocking warning policy is unchanged.
+
+### Open threads and Phase 4B candidates (not implemented)
+
+Provenance is explicitly attached and has no removal/status-edit CLI yet.
+There is no historical entity occurrence table: comparisons depend on the
+current catalog and the existing tagged-name extractor. Output is bounded,
+but comparison work and memory scale with stored rows and traces. No semantic
+equivalence, automatic importance/confidence, or causal conclusions are inferred.
+
+Recommended Phase 4B starting slice: explicit Git commit metadata associated
+with test runs, with source paths/revisions and deterministic queries. Keep the
+next milestone bounded; broader source intelligence can follow measured needs.
+Candidates to evaluate separately:
+
+- Git/source-code intelligence and commit ↔ test-run correlation.
+- SQLite FTS5 when exact structured lookup misses relevant stored text.
+- Manual entity creation and entity aliases with ambiguity handling.
+- Safe, constrained automatic log ingestion with deduplication and explicit scope.
+- Embeddings only after structured and full-text retrieval prove insufficient.
+
+**Structured and deterministic retrieval first. Semantic retrieval only where
+exact retrieval eventually proves insufficient. Phase 4B has not begun.**
