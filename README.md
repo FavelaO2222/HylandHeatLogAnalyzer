@@ -708,20 +708,42 @@ python -m database.mcp_server --database data/hylandheat.db
 ```
 
 Point an MCP client's config at that command (stdio transport, the SDK's
-default) to connect it — for example, in a Claude Desktop/Claude Code style
-`mcpServers` config block:
+default) to connect it. `python -m database.mcp_server` needs its working
+directory set to this project root — it's a Python module using relative
+imports, which requires the project root on `sys.path`, something `-m`
+normally gets from the launching process's cwd. Most MCP client config
+formats accept a `cwd` field, but **it does not actually work in Claude
+Code's `.mcp.json`** ([confirmed broken, closed as "not planned"](https://github.com/anthropics/claude-code/issues/17565))
+and Codex's `config.toml` has no `cwd` field for stdio servers at all — so
+the portable fix that works everywhere is a shell wrapper that `cd`s before
+exec'ing python, which is exactly what this project's own `.mcp.json` (for
+Claude Code) does:
 
 ```json
 {
   "mcpServers": {
     "hyland-heat-research-db": {
-      "command": "python3",
-      "args": ["-m", "database.mcp_server", "--database", "data/hylandheat.db"],
-      "cwd": "/absolute/path/to/HylandHeatLogAnalyzer"
+      "type": "stdio",
+      "command": "bash",
+      "args": ["-c", "cd '/absolute/path/to/HylandHeatLogAnalyzer' && exec python3 -m database.mcp_server --database data/hylandheat.db"]
     }
   }
 }
 ```
+
+For Codex, the equivalent goes in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.hyland-heat-research-db]
+command = "bash"
+args = ["-c", "cd '/absolute/path/to/HylandHeatLogAnalyzer' && exec python3 -m database.mcp_server --database data/hylandheat.db"]
+```
+
+Claude Code treats a project's `.mcp.json` as untrusted until you approve
+it — expect a one-time prompt the first time you open this project after
+adding it. Either client needs restarting (or a fresh session opened in
+this project) to pick up a new/changed MCP config; it isn't hot-reloaded
+into a session that's already running.
 
 The database path is fixed once at server startup (`--database`, defaulting
 to `data/hylandheat.db`) and is **never** a tool argument, so a connected

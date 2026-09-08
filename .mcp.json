@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "hyland-heat-research-db": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "-c",
+        "cd '/home/oska/PycharmProjects/PythonProject/HylandHeatLogAnalyzer' && exec python3 -m database.mcp_server --database data/hylandheat.db"
+      ]
+    }
+  }
+}
