@@ -503,6 +503,7 @@ CREATE TABLE source_artifacts (
 INSERT INTO "source_artifacts" VALUES(1,'log','/home/oska/RiderProjects/HylandHeat/TestResults/swat-network-audit-20260906/Latest.log','Latest.log','9676d8261242bbdb37a9f2b4877cb27adf4fb41d53e5ba7a219a52fd4a2b6885',NULL,'2026-09-08T02:15:08.517Z','Raw log; path records first registration. Original creation time is unknown.');
 INSERT INTO "source_artifacts" VALUES(2,'log','/home/oska/.steam/debian-installation/steamapps/common/Schedule I/MelonLoader/Latest.log','Latest.log','f6d141069bb02fcccf00eb172d331e08b57cbb93b650c2fd7178e7c4ed595122',NULL,'2026-09-08T06:07:00.506Z','Raw log; path records first registration. Original creation time is unknown.');
 INSERT INTO "source_artifacts" VALUES(3,'source_code','/home/oska/RiderProjects/HylandHeat','HylandHeat',NULL,NULL,'2026-09-08T16:09:13.796Z','{"file_count": 45, "skipped": 0, "mod_revision": "ad2bfc0"}');
+INSERT INTO "source_artifacts" VALUES(4,'decompiler_export','/home/oska/.steam/debian-installation/steamapps/common/Schedule I/MelonLoader/Il2CppAssemblies/Assembly-CSharp.dll','Assembly-CSharp.dll',NULL,NULL,'2026-09-08T16:14:04.790Z','{"file_count": 1965, "skipped": 0, "mod_revision": null, "decompiler": "ilspycmd 11.0.0.9375", "namespace_filter": "Il2CppScheduleOne*"}');
 CREATE TABLE test_runs (
     id INTEGER PRIMARY KEY,
     source_artifact_id INTEGER REFERENCES source_artifacts(id) ON DELETE RESTRICT,
