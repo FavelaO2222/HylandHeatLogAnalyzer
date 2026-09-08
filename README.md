@@ -618,9 +618,11 @@ own self-init behavior. Every tool is a thin wrapper around an already
 validated module function — `add_finding`, `list_findings`,
 `update_finding_status` (`record_finding.py`), `sync_entities`,
 `list_entities` (`entity_extraction.py`), `build_context`
-(`context_builder.py`), and `inspect_database` (`inspect_db.py`) — so no new
-validation, entity-resolution, or provenance-checking logic exists here, and
-nothing here writes a finding/unknown/decision automatically from evidence.
+(`context_builder.py`), `inspect_database` (`inspect_db.py`), and
+`backup_database` (`backup.py`; see [Backup and restore](#backup-and-restore))
+— so no new validation, entity-resolution, or provenance-checking logic
+exists here, and nothing here writes a finding/unknown/decision
+automatically from evidence.
 A validation error (e.g. an unresolvable `subject_name`, an unknown
 `finding_id`) is caught and returned as the tool's own concise error text
 (the same wording the CLI prints), rather than the SDK's generic "Error
@@ -662,10 +664,37 @@ own `PRAGMA foreign_key_check` immediately afterward and refuses (deleting
 the partial file) if that check finds anything, before a caller can reach
 the restored file through the normal, enforcing `connect_database`.
 
-Neither command touches git — running `dump` only rewrites
+The CLI itself never touches git — running `dump` only rewrites
 `backups/hylandheat.sql` on disk. Actually protecting the data still needs a
-`git add backups/hylandheat.sql && git commit` afterward (or asking an
-assistant to do so); a sensible habit is dumping after any session that
-recorded findings or ran a new ingestion. This is not yet wired into
-`mcp_server.py` or run automatically after a write — a connected assistant
-can be asked to run `dump` and commit it, the same as any other CLI here.
+`git add backups/hylandheat.sql && git commit` afterward. Two things now
+make that easy to keep up with instead of relying on remembering to do it:
+
+### MCP tool
+
+`mcp_server.py` exposes `backup_database()` alongside its other tools (see
+[MCP server](#mcp-server)) — a connected assistant can trigger a dump on
+request without a person running the CLI by hand. Like every other tool
+here, it takes no path argument (it always writes to the default
+`backups/hylandheat.sql`) and only writes the file; it still doesn't commit
+anything, so ask for that as a separate, explicit step afterward.
+
+### Pre-commit hook
+
+`githooks/pre-commit` refreshes and stages `backups/hylandheat.sql`
+automatically before every commit, so the tracked snapshot can never
+silently drift out of sync with whatever `data/hylandheat.db` looks like at
+commit time. `.git/hooks/` is never itself tracked by git, so a fresh clone
+needs one one-time install step:
+
+```bash
+cp githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+The hook is deliberately non-blocking: it skips silently if
+`data/hylandheat.db` doesn't exist yet (nothing to back up), and if a dump
+attempt fails (e.g. the live database fails its own foreign key check) it
+prints a warning to stderr but still lets the commit through, rather than
+blocking an otherwise-unrelated commit over a database problem. On success
+it runs `dump` and `git add`s the refreshed file into the commit already in
+progress — a standard, well-established hook pattern (the same one
+auto-formatting pre-commit hooks use).

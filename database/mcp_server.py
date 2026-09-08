@@ -17,7 +17,7 @@ import sqlite3
 
 from mcp.server.mcpserver import MCPServer
 
-from . import context_builder, entity_extraction, inspect_db, record_finding
+from . import backup, context_builder, entity_extraction, inspect_db, record_finding
 from .db import database_exists, initialize_database, resolve_database_path
 
 mcp = MCPServer('hyland-heat-research-db')
@@ -117,6 +117,20 @@ def build_context(run_id: int | None = None, max_chars: int = 6000, max_events: 
 def inspect_database(latest_run: bool = False) -> str:
     """Read-only table-count overview of the research database, optionally with the latest test run's summary."""
     return _safely(lambda: inspect_db.inspect_database(_db(), latest_run))
+
+
+@mcp.tool()
+def backup_database() -> str:
+    """Write a full SQL dump of the database to backups/hylandheat.sql, so the recorded research
+    (not just the code) has git history: data/*.db is gitignored generated data with no history of
+    its own. Read-only against the live database; refuses to back up a source that already fails
+    its own foreign key check. This only writes the file on disk — it does not touch git. Ask for
+    the refreshed dump to actually be committed afterward to protect this data.
+    """
+    def action():
+        path = backup.dump_database(_db())
+        return f'Wrote {path}. Ask for it to be committed to actually protect this data.'
+    return _safely(action)
 
 
 def main(argv=None):

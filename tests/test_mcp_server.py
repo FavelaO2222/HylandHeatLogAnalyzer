@@ -11,10 +11,11 @@ from contextlib import closing
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from database import db, mcp_server
 from database.mcp_server import (
-    add_finding, build_context, configure, inspect_database, list_entities,
+    add_finding, backup_database, build_context, configure, inspect_database, list_entities,
     list_findings, mcp, sync_entities, update_finding_status,
 )
 
@@ -96,6 +97,37 @@ class McpServerToolTests(unittest.TestCase):
         self.assertIn('Test runs: 1', summary)
         self.assertIn('Latest Test Run', summary)
 
+    def test_backup_database_writes_dump_at_default_location(self):
+        # backup_database() takes no path argument by design, so it always resolves
+        # DEFAULT_BACKUP_PATH; patch that constant rather than touching the real,
+        # already-committed backups/hylandheat.sql.
+        self.seed_run_with_identity_event()
+        fake_default = Path(self.temp.name) / 'backups' / 'hylandheat.sql'
+        with patch.object(mcp_server.backup, 'DEFAULT_BACKUP_PATH', fake_default):
+            result = backup_database()
+        self.assertIn('Wrote', result)
+        self.assertIn('Ask for it to be committed', result)
+        self.assertTrue(fake_default.exists())
+        self.assertIn('CREATE TABLE', fake_default.read_text(encoding='utf-8'))
+
+    def test_backup_database_error_surfaces_real_message(self):
+        # configure() self-initializes a missing database, so it can't produce this error path;
+        # plant a genuine foreign-key violation instead (bypassing connect_database's enforcement,
+        # same technique test_backup.py uses), and set _database directly to skip configure()'s init.
+        import sqlite3
+        db.initialize_database(self.path)
+        connection = sqlite3.connect(self.path)
+        connection.execute(
+            "INSERT INTO events (test_run_id, source_artifact_id, category, message) VALUES (999, 999, 'x', 'y')")
+        connection.commit()
+        connection.close()
+        mcp_server._database = self.path
+        fake_default = Path(self.temp.name) / 'backups' / 'hylandheat.sql'
+        with patch.object(mcp_server.backup, 'DEFAULT_BACKUP_PATH', fake_default):
+            result = backup_database()
+        self.assertTrue(result.startswith('Error:'))
+        self.assertFalse(fake_default.exists())
+
 
 class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -110,7 +142,8 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
             tools = await client.list_tools()
             names = {t.name for t in tools.tools}
             for expected in ('add_finding', 'list_findings', 'update_finding_status',
-                             'sync_entities', 'list_entities', 'build_context', 'inspect_database'):
+                             'sync_entities', 'list_entities', 'build_context', 'inspect_database',
+                             'backup_database'):
                 self.assertIn(expected, names)
 
             result = await client.call_tool('add_finding', {'finding': 'Protocol round trip works'})

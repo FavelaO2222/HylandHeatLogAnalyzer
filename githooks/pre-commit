@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Pre-commit hook: keeps backups/hylandheat.sql in sync with data/hylandheat.db.
+
+.git/hooks/ is never tracked by git, so this tracked copy is not itself the
+installed hook. Install (once per clone) with:
+    cp githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+Never blocks a commit: skips silently if there is no database yet, and only
+warns (without stopping the commit) if a dump attempt fails, since this hook
+is a convenience/safety net, not a correctness gate on unrelated changes.
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main():
+    root = Path(subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip())
+    database = root / 'data' / 'hylandheat.db'
+    if not database.is_file():
+        return 0
+    backup = root / 'backups' / 'hylandheat.sql'
+    result = subprocess.run(
+        [sys.executable, '-m', 'database.backup', 'dump', '--database', str(database), '--backup', str(backup)],
+        cwd=root, capture_output=True, text=True)
+    if result.returncode == 0:
+        subprocess.run(['git', 'add', str(backup)], cwd=root, check=True)
+    else:
+        print('warning: backups/hylandheat.sql was not refreshed (commit proceeding anyway):', file=sys.stderr)
+        print(result.stdout + result.stderr, file=sys.stderr)
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
