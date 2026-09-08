@@ -16,10 +16,13 @@ against an imported test run, and `database.ingest_source` (see
 [Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion)) makes its
 own source, and the game's decompiled assemblies, full-text searchable too.
 
-Current milestone: **Phase 4C — source and decompiled-assembly ingestion**,
-using database schema v4. See [Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion)
-for what's ingested and why, and [Phase 4B](#phase-4b-full-text-search-fts5)
-for the full-text search mechanics both phases share.
+Current milestone: **Phase 4D — reliable cross-artifact evidence retrieval**
+(idempotent ingestion, provenance, the `research` symbol/question command,
+recorded experiments), using database schema v5. See
+[Phase 4D](#phase-4d-reliable-cross-artifact-evidence-retrieval) for the
+`research` command and its examples, [Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion)
+for what gets ingested and why, and [Phase 4B](#phase-4b-full-text-search-fts5)
+for the full-text search mechanics all three phases share.
 Structured and deterministic retrieval first. Semantic retrieval only where
 exact retrieval eventually proves insufficient.
 
@@ -1341,6 +1344,242 @@ Deeper source intelligence — mapping an error's stack-frame file/line
 straight to the matching decompiled member, or a commit-range diff against
 a run's behavior — remains out of scope for this slice; ingested documents
 are searchable, not yet cross-referenced against `errors.stack_trace`.
+(Phase 4D below adds cross-artifact evidence packets and idempotent
+re-ingestion, but not that specific stack-frame mapping.)
+
+## Phase 4D: Reliable Cross-Artifact Evidence Retrieval
+
+Phase 4C made four artifact classes (logs, evidence, mod source, decompiled
+game code) each independently searchable. Phase 4D makes them work
+*together* as one evidence-retrieval system: idempotent ingestion so
+re-checking unchanged files doesn't pile up duplicates, complete provenance
+on what's ingested, a single `research` command that answers a symbol
+question by pulling from all of them at once, and a place to record what an
+actual play-test observed. Validated against this repository's real, live
+data throughout — including a bug (`database.search` erroring on any dotted
+symbol like `NPC.EnterBuilding`) and a design gap (repeated ingestion was
+never idempotent) found by testing the nine priority symbols against what
+was already ingested, not discovered afterward.
+
+### Fixed: FTS5 couldn't search a dotted symbol
+
+`python3 -m database.search "NPC.EnterBuilding"` used to fail outright —
+`fts5: syntax error near "."` — because FTS5 treats a bare `.` as query
+syntax (a token separator), not a literal character. Every C# `Type.Member`
+symbol contains one. `database.search`'s `DOTTED_SYMBOL_SEPARATOR` regex now
+splits a dot *between two word characters* into a space before the query
+reaches FTS5 (`NPC.EnterBuilding` → `NPC EnterBuilding`, an implicit AND of
+both words), leaving quoted phrases, `*`, and boolean operators alone.
+
+### Schema v5: idempotent ingestion + experiments
+
+`source_documents` gains `collection` (a caller-chosen stable identity,
+deliberately independent of `--root` — real decompiled/git-archive output
+comes from a fresh scratch directory nearly every time, so matching on the
+literal root path would never converge for the ingestions that matter most)
+and `content_sha256`. `database.ingest_source.ingest_directory` now hashes
+each file and skips it — no new row — when that hash matches the latest
+existing row for the same `(collection, relative_path)`; a changed or new
+file still gets a new row, so "what did this file look like as of commit X"
+history is preserved, it's just never duplicated for nothing. A
+`source_artifacts` row is still written on every call regardless (the audit
+trail of when a collection was last checked), even when nothing changed:
+
+```bash
+python3 -m database.ingest_source --database data/hylandheat.db \
+    --root /home/oska/RiderProjects/HylandHeat --artifact-type source_code \
+    --collection hylandheat-mod-source --mod-repo /home/oska/RiderProjects/HylandHeat
+# re-running the same command after further edits only inserts the files that
+# actually changed; unchanged ones are reported, not re-stored
+```
+
+`collection` defaults to the resolved `--root` path when omitted (so a
+simple, always-same-path caller gets idempotency for free), but should be
+given explicitly whenever `--root` is an ephemeral extraction directory,
+which decompiled/git-archive output usually is — see the live examples
+above for the exact `--collection` values this project's own data uses.
+
+SQLite has no idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so
+migrating an *existing, populated* `source_documents` table (unlike every
+earlier migration here, which only ever added whole new tables) needed
+`database.db`'s new `_pending_column_additions` helper — folded into the
+same migration script/transaction as everything else, not run separately
+beforehand, so a later failure in that script still rolls the column
+addition back too.
+
+Schema v5 also adds `experiments`/`experiment_symbols` (see below).
+
+### `database.research`: the cross-artifact evidence packet
+
+```bash
+python3 -m database.research "NPC.EnterBuilding" --database data/hylandheat.db
+```
+
+Given a symbol or short question, returns one bounded, honest Markdown
+report instead of raw rows: Hyland Heat call/patch sites, decompiled
+declaration/implementation locations, related runtime-log events and
+errors, related findings/unknowns/decisions, and matching recorded
+experiments — each section independently bounded (`--limit`, default 6) and
+each explicitly printing "No matches found." rather than being silently
+omitted when empty, so an absent category is a visible, honest fact, never
+an invented one. Two mechanical closing lines: a structural
+**interpretation** (which categories have/lack coverage — never a causal
+claim about game behavior, which this tool has no basis to assert) and one
+rule-based **suggested next research target**, prioritizing a missing
+source-code match over a missing runtime log (there's little point
+capturing a play session for a symbol nothing has even located in code
+yet), falling back to the most frequent co-occurring identifier across
+existing matches once every category already has coverage.
+
+Declaration-vs-reference classification happens **transiently at query
+time** — scanning the same `source_documents.content` FTS5 already indexes
+with a small regex heuristic (a class/struct/method-signature-shaped line
+containing the token) — rather than a separately persisted symbol index
+that could drift out of sync with the content it's supposed to describe.
+For a dotted query, the part *after* the last dot (the specific member) is
+matched before the part before it (its enclosing type), so
+`PoliceStation.PullOfficer` surfaces the `PullOfficer()` method's own
+declaration rather than `PoliceStation`'s class declaration just because
+the class line happens to appear earlier in the file. This is a heuristic,
+not a real C#/IL2CPP parser — see Phase 4C's rationale for why parsing was
+deliberately avoided.
+
+Query text never reaches FTS5 raw — only identifier-like tokens extracted
+from it (common English filler words dropped: "what", "does", "during",
+and similar), so a full punctuated question works exactly like a bare
+symbol, with no FTS5 syntax error possible either way. Those tokens are
+tried as an **exact match first** (every one required — precise, and for
+the documented common case of a short symbol query, almost always what's
+wanted), and only **broadened to "any token"** if that finds nothing across
+every FTS-backed section — a real multi-word question inevitably extracts
+several independently meaningful words that no single file is likely to
+contain together, even when several separately are exactly the evidence
+worth surfacing. Which mode actually ran is never hidden: the Markdown
+output notes when it broadened, and the JSON `mode` field says `"and"` or
+`"or"` either way — an exact-match query that found nothing is itself
+honest, reportable signal (no single file ties these terms together), not
+a tool failure silently retried into something more permissive.
+
+MCP tool `research`, alongside the existing `search`/`compare_runs`/
+`build_context` — prefer it over raw `search` whenever a question spans
+more than one artifact class, which is the usual case for "what explains
+this game behavior."
+
+### `database.record_experiment`: recording what was actually observed
+
+```bash
+python3 -m database.record_experiment add \
+    --question "Does an officer clone's ActiveSelf change during NPC.EnterBuilding?" \
+    --observed-result "Not yet observed directly; only static code located." \
+    --symbols "NPC.EnterBuilding,ActiveSelf" --database data/hylandheat.db
+python3 -m database.record_experiment list --symbol NPC.EnterBuilding
+```
+
+An experiment is the record of having looked, distinct from a finding (a
+conclusion, possibly drawn from several such observations). `--symbols` is
+a comma-separated tag list (`experiment_symbols`, a proper junction table,
+not a JSON column — `research` joins against it directly) tying the
+observation to specific code symbols so `research` surfaces it later.
+`--source-log` accepts either a raw game log or a pre-summarized brief text
+file (e.g. `Latest_brief.txt`) — either way it's registered as an ordinary,
+sha256-deduped `source_artifacts` row (the same reuse pattern
+`database.ingestion` already uses for log imports) rather than being
+structurally parsed; `observed_result`, in the caller's own words, is what
+actually captures the finding. `--mod-repo` reuses
+`database.source_revision.capture_revision`, the same helper the analyzer
+CLI's `--mod-repo` already uses. MCP tools `add_experiment`/
+`list_experiments`.
+
+### Backup policy, reconfirmed
+
+`experiments`/`experiment_symbols` are ordinary structured research records
+— included in the public dump exactly like `findings`/`decisions` already
+are; no new exclusion needed. `source_documents` (now with two more
+columns) stays excluded exactly as Phase 4C established. Both re-verified
+by test, not just assumed.
+
+### Demonstration against the live database
+
+```bash
+python3 -m database.research \
+    "What code and runtime evidence explains when a Hyland officer clone changes ActiveSelf during NPC.EnterBuilding?" \
+    --database data/hylandheat.db --limit 8
+```
+
+Extracted tokens (filler words dropped): `Hyland`, `officer`, `clone`,
+`ActiveSelf`, `EnterBuilding`, `NPC`. The exact-match pass found nothing
+across every FTS-backed section — no single ingested file mentions all six
+together — so it broadened to "any token" automatically, which the output
+says explicitly:
+
+```text
+# Research: "...ActiveSelf during NPC.EnterBuilding?" (broadened to match
+any extracted term after an exact-match search found nothing)
+
+## Hyland Heat call/patch sites
+- HylandHeat/Debug/OfficerCloneDebug.cs:671 [declaration] private static
+  bool IsInStationPool(PoliceOfficer officer)
+- HylandHeat/SWAT/SwatDiagnostics.cs:160 [declaration] public static bool
+  InPool(PoliceOfficer officer)
+... (19 total; officer/clone-pool-tracking debug tooling, not ActiveSelf itself)
+
+## Decompiled declaration/implementation locations
+- Il2CppScheduleOne.Cartel/CartelGoon.cs:18 [declaration] public class
+  CartelGoon : NPC
+... (213 total; broad NPC-subclass matches, not narrowed to EnterBuilding)
+
+## Related runtime-log events
+- [event #75] (run #1, line 263) OFFICER CLONE QUEUE PROGRESS:
+  Created=1/20, Latest=officerlee2
+... (9 total; clone-creation queue progress, not an EnterBuilding/ActiveSelf event)
+
+## Related runtime-log errors
+- [error #3] (run #2, line 137) SESSION LOG: Path=...
+
+## Related evidence/research records
+- [finding #1] OfficerLee2's copied SceneId maps back to OfficerLee, ruling
+  out a genuinely independent disposable SWAT clone.
+- [unknown #1] (open) Does goon-clone reuse hold under paired same-instance
+  evidence, or does population completeness only look like reuse?
+
+## Related recorded experiments
+No matches found.
+
+## Suggested next research target
+"npc" co-occurs with this query in multiple matches; may be worth its own research pass.
+```
+
+**Gaps that prevented a complete answer** (stated plainly, not papered over):
+`ActiveSelf` never appears in the currently-ingested `Il2CppScheduleOne.*`
+decompiled set at all — it's a Unity `GameObject`/`Component` API, defined
+in `UnityEngine.*`, not the game's own assembly, so it was never going to
+be found there. `EnterBuilding` likewise has no decompiled declaration
+match here (`NPC.cs` itself doesn't define it under that exact name in what
+was decompiled — it may be inherited, generated, or live in a differently-
+named member). No runtime log currently captures an `EnterBuilding` call or
+an `ActiveSelf` toggle directly — the nine related events are clone-creation
+queue progress, evidence of clone *population*, not of this specific
+lifecycle transition. And no experiment has been recorded for this question
+yet — `database.record_experiment` exists now specifically to close that
+gap once something is actually observed. Put together: **the database
+cannot currently support a complete answer to this question** — it correctly
+knows that, and says so, rather than fabricating a connection between
+clone-creation evidence and an `ActiveSelf` change nothing here has
+actually observed.
+
+### Open threads
+
+Stack-frame-to-declaration mapping (an `errors.stack_trace` line pointing
+straight at the decompiled member it came from) is still not implemented.
+The declaration/reference classifier is a line-shape heuristic, not a real
+parser, and can occasionally pick a less-specific line than intended for
+unusual formatting. `research`'s "related evidence/research records"
+section is a bounded `LIKE` scan (findings/unknowns/decisions are small —
+low single digits of rows live — with their own `list_*` filters already;
+not worth a fourth FTS table yet). The OR-fallback's "co-occurring symbol"
+suggestion is a plain word-frequency count over already-matched lines (C#
+keywords excluded, but not e.g. case duplicates like `NPC`/`npc`), so it can
+occasionally surface a less useful term than a person would pick by hand.
 
 **Structured and deterministic retrieval first. Semantic retrieval only where
 exact retrieval eventually proves insufficient.**
