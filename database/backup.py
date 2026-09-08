@@ -6,19 +6,52 @@ dump this module writes to backups/ is what actually gets versioned, so the
 recorded findings/entities/events are recoverable the same way the code
 already is. Dumping never mutates the source; restoring only ever creates a
 brand-new file, never overwrites an existing one.
+
+Schema v3's events_fts/errors_fts (see schema.sql and database.search) are
+deliberately excluded from the dump: sqlite3.Connection.iterdump() replays a
+virtual table's shadow-table content by patching sqlite_master directly under
+`PRAGMA writable_schema=ON` rather than issuing a real `CREATE VIRTUAL TABLE`,
+and that patched entry is not visible to the very same connection running the
+rest of the script -- a restore attempts an INSERT into a table SQLite does
+not yet consider to exist and fails outright. Rather than depend on that, the
+dump carries only the authoritative events/errors rows; restore recreates the
+FTS5 index structurally (a real, ordinary `CREATE VIRTUAL TABLE`, which works
+fine on its own) and rebuilds it from those restored rows, via
+database.search.recreate_index -- see database.search's docstring for why a
+rebuild is cheap and safe to do unconditionally.
 """
 
 import argparse
 from contextlib import closing
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 import tempfile
 
 from .db import PROJECT_ROOT, connect_database, resolve_database_path, validate_schema_version
+from .search import recreate_index
 
 DEFAULT_BACKUP_PATH = PROJECT_ROOT / 'backups' / 'hylandheat.sql'
+_FTS5_SHADOW_SUFFIXES = ('_data', '_idx', '_docsize', '_config', '_content')
+_DUMP_STATEMENT_TABLE = re.compile(r'''^(?:CREATE\s+TABLE|INSERT\s+INTO)\s+["']?([A-Za-z_][A-Za-z0-9_]*)["']?[\s(]''')
+
+
+def _fts5_table_names(connection):
+    """Every FTS5 virtual table plus its shadow tables (see module docstring)."""
+    virtual = [row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'")]
+    return {name for base in virtual for name in (base, *(base + suffix for suffix in _FTS5_SHADOW_SUFFIXES))}
+
+
+def _dump_line_excluded(line, excluded_tables):
+    if line in ('PRAGMA writable_schema=ON;', 'PRAGMA writable_schema=OFF;'):
+        return True
+    if line.startswith('INSERT INTO sqlite_master('):
+        return True
+    match = _DUMP_STATEMENT_TABLE.match(line)
+    return match is not None and match.group(1) in excluded_tables
 
 
 def resolve_backup_path(backup=None):
@@ -47,6 +80,7 @@ def dump_database(database=None, backup=None):
         violations = connection.execute('PRAGMA foreign_key_check').fetchall()
         if violations:
             raise ValueError(f'Source database fails its own foreign key check: {violations}')
+        excluded = _fts5_table_names(connection)
         backup_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
@@ -54,6 +88,8 @@ def dump_database(database=None, backup=None):
                                              prefix=backup_path.name + '.', suffix='.tmp', delete=False) as handle:
                 temporary = Path(handle.name)
                 for line in connection.iterdump():
+                    if _dump_line_excluded(line, excluded):
+                        continue
                     handle.write(line + '\n')
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -90,7 +126,14 @@ def restore_database(database, backup=None):
         violations = connection.execute('PRAGMA foreign_key_check').fetchall()
         if violations:
             raise ValueError(f'Restored database failed its own foreign key check: {violations}')
-        validate_schema_version(connection)
+        version = validate_schema_version(connection)
+        if version >= 3:
+            # The dump excluded events_fts/errors_fts (see module docstring);
+            # recreate them structurally and rebuild from the rows just
+            # restored above. Only ever adds the FTS5 objects back at the
+            # database's own already-restored version -- never touches
+            # schema_version, so this is not an implicit migration.
+            recreate_index(connection)
     except Exception:
         connection.close()
         target.unlink(missing_ok=True)

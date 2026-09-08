@@ -21,6 +21,7 @@ from database.mcp_server import (
     list_relationships, list_unknowns, mcp, sync_entities, update_decision_status, update_finding_status,
     update_unknown_status,
     attach_evidence, list_evidence, compare_runs,
+    search, rebuild_search_index,
 )
 
 
@@ -202,6 +203,28 @@ class McpServerToolTests(unittest.TestCase):
         self.assertTrue(fake_default.exists())
         self.assertIn('CREATE TABLE', fake_default.read_text(encoding='utf-8'))
 
+    def test_search_returns_structured_ranked_results(self):
+        run_id, _ = self.seed_run_with_identity_event()
+        result = search('OfficerLee')
+        self.assertEqual(result['items'][0]['test_run_id'], run_id)
+        self.assertEqual(result['items'][0]['source'], 'event')
+        self.assertFalse(result['truncated'])
+
+    def test_search_type_filter_and_no_match(self):
+        self.seed_run_with_identity_event()
+        self.assertEqual(search('OfficerLee', type='errors')['items'], [])
+        self.assertEqual(search('nonexistentterm')['items'], [])
+
+    def test_search_error_surfaces_real_message(self):
+        result = search('x', type='bogus')
+        self.assertIn('error', result)
+        self.assertIn("type must be one of", result['error'])
+
+    def test_rebuild_search_index(self):
+        self.seed_run_with_identity_event()
+        self.assertEqual(rebuild_search_index(), 'Rebuilt search index: 1 events, 0 errors indexed.')
+        self.assertEqual(len(search('OfficerLee')['items']), 1)
+
     def test_backup_database_error_surfaces_real_message(self):
         # configure() self-initializes a missing database, so it can't produce this error path;
         # plant a genuine foreign-key violation instead (bypassing connect_database's enforcement,
@@ -238,7 +261,8 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
                              'add_decision', 'list_decisions', 'update_decision_status',
                              'add_relationship', 'list_relationships',
                              'sync_entities', 'list_entities', 'build_context', 'build_entity_context',
-                             'inspect_database', 'backup_database', 'attach_evidence', 'list_evidence', 'compare_runs'):
+                             'inspect_database', 'backup_database', 'attach_evidence', 'list_evidence', 'compare_runs',
+                             'search', 'rebuild_search_index'):
                 self.assertIn(expected, names)
 
             result = await client.call_tool('add_finding', {'finding': 'Protocol round trip works'})
@@ -270,6 +294,9 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
             result = await client.call_tool('attach_evidence',
                 {'record_type': 'finding', 'record_id': 1, 'target_type': 'event', 'target_id': 999})
             self.assertIn('No event', result.structured_content['error'])
+            result = await client.call_tool('search', {'query': 'Shared', 'type': 'events'})
+            self.assertFalse(result.is_error)
+            self.assertEqual({item['id'] for item in result.structured_content['items']}, {1, 2})
 
 
 if __name__ == '__main__':

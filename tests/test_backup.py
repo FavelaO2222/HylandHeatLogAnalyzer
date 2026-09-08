@@ -11,7 +11,8 @@ from unittest.mock import patch
 from database import db
 from database.backup import dump_database, main, restore_database
 from database.evidence import attach_evidence, list_evidence
-from phase4_fixtures import seed, snapshot
+from database.search import search
+from phase4_fixtures import create_v1, seed, snapshot
 
 
 class BackupRestoreTests(unittest.TestCase):
@@ -117,12 +118,18 @@ class BackupRestoreTests(unittest.TestCase):
         self.assertFalse(target.exists())
 
     def test_restore_of_dump_with_foreign_key_violation_is_rejected_and_cleaned_up(self):
-        self.backup_path.parent.mkdir(parents=True, exist_ok=True)
         self.open_database()
-        schema_only = '\n'.join(sqlite3.connect(self.path).iterdump())
+        dump_database(self.path, self.backup_path)
+        schema_only = self.backup_path.read_text(encoding='utf-8')
+        # relationships has no FTS5 trigger attached (only events/errors do),
+        # so this injected row cannot collide with the events_fts_ai-firing
+        # issue that using events/errors here would hit once restore's
+        # earlier-created triggers are live (see test_dump_excludes_the_
+        # fts5_search_index) -- this test targets the foreign-key check alone.
         bad_dump = schema_only.replace(
             'COMMIT;',
-            "INSERT INTO events (test_run_id, source_artifact_id, category, message) VALUES (999, 999, 'x', 'y');\n"
+            "INSERT INTO relationships (source_entity_id, relationship_type, target_entity_id) "
+            "VALUES (999, 'x', 1000);\n"
             "COMMIT;")
         self.backup_path.write_text(bad_dump, encoding='utf-8')
         target = Path(self.temp.name) / 'broken.db'
@@ -172,7 +179,7 @@ class BackupRestoreTests(unittest.TestCase):
         restored_path = restore_database(Path(self.temp.name) / 'restored.db', self.backup_path)
         with closing(db.connect_database(restored_path)) as restored:
             self.assertEqual(snapshot(restored), before)
-            self.assertEqual(db.validate_schema_version(restored), 2)
+            self.assertEqual(db.validate_schema_version(restored), 3)
             with self.assertRaises(sqlite3.IntegrityError), restored:
                 restored.execute('DELETE FROM events WHERE id=1')
             with self.assertRaises(sqlite3.IntegrityError), restored:
@@ -200,6 +207,58 @@ class BackupRestoreTests(unittest.TestCase):
                 dump_database(self.path, self.backup_path)
         self.assertEqual(self.backup_path.read_bytes(), before)
         self.assertEqual(list(self.backup_path.parent.glob('*.tmp')), [])
+
+    def test_dump_excludes_the_fts5_search_index(self):
+        # Triggers are plain DDL on events/errors and dump/restore normally
+        # (they run fine before events_fts even exists); only the virtual
+        # table itself and its shadow tables -- the actual index state --
+        # are excluded. See backup.py's module docstring for why.
+        connection = self.open_database()
+        with connection:
+            self.seed(connection)
+        dump_database(self.path, self.backup_path)
+        text = self.backup_path.read_text(encoding='utf-8')
+        self.assertNotIn('CREATE VIRTUAL TABLE', text)
+        self.assertNotIn('writable_schema', text)
+        self.assertNotIn('sqlite_master', text)
+        for shadow in ('_data', '_idx', '_docsize', '_config'):
+            self.assertNotIn(f"events_fts{shadow}", text)
+            self.assertNotIn(f"errors_fts{shadow}", text)
+        self.assertNotIn('INSERT INTO "events_fts"', text)
+        self.assertNotIn('INSERT INTO "errors_fts"', text)
+        self.assertIn('CREATE TRIGGER events_fts_ai', text)
+
+    def test_restore_recreates_and_rebuilds_the_search_index(self):
+        connection = self.open_database()
+        with connection:
+            self.seed(connection)
+        dump_database(self.path, self.backup_path)
+        restored_path = Path(self.temp.name) / 'restored.db'
+        restore_database(restored_path, self.backup_path)
+        with closing(db.connect_database(restored_path)) as restored:
+            self.assertEqual(db.validate_schema_version(restored), db.SCHEMA_VERSION)
+            tables = {r[0] for r in restored.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn('events_fts', tables)
+        result = search(restored_path, 'OfficerLee', type='events')
+        self.assertEqual([item['id'] for item in result['items']], [1])
+        self.assertIn('OfficerLee', result['items'][0]['snippet'])
+
+    def test_v1_restore_stays_v1_with_no_search_index(self):
+        # A v1 backup restores as v1, with no FTS5 index -- restore never
+        # migrates a database implicitly, and a v1 database has no search
+        # index to rebuild in the first place.
+        v1_path = Path(self.temp.name) / 'v1.db'
+        create_v1(v1_path)
+        v1_dump = Path(self.temp.name) / 'v1.sql'
+        dump_database(v1_path, v1_dump)
+        restored_path = Path(self.temp.name) / 'restored_v1.db'
+        restore_database(restored_path, v1_dump)
+        with closing(db.connect_database(restored_path)) as restored:
+            self.assertEqual(db.validate_schema_version(restored), 1)
+            tables = {r[0] for r in restored.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertNotIn('events_fts', tables)
+        with self.assertRaisesRegex(ValueError, 'database.init_db'):
+            search(restored_path, 'anything')
 
     def test_dump_cannot_overwrite_database_or_hardlink_alias(self):
         self.open_database()

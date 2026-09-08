@@ -19,6 +19,7 @@ from mcp.server.mcpserver import MCPServer
 
 from . import (backup, context_builder, entity_extraction, evidence, inspect_db, record_decision, record_finding,
                record_relationship, record_unknown, run_comparison)
+from . import search as fts_search
 from .db import database_exists, initialize_database, resolve_database_path
 
 mcp = MCPServer('hyland-heat-research-db')
@@ -295,6 +296,36 @@ def backup_database() -> str:
     def action():
         path = backup.dump_database(_db())
         return f'Wrote {path}. Ask for it to be committed to actually protect this data.'
+    return _safely(action)
+
+
+@mcp.tool(structured_output=True)
+def search(query: str, type: str | None = None, limit: int = 20) -> dict[str, object]:
+    """Ranked full-text search over ingested events/errors (SQLite FTS5, bm25 ranking). Requires schema v3.
+
+    type restricts to 'events' or 'errors' (default: both). limit is 1-100.
+    Each item has source ('event'/'error'), id, test_run_id, source_line, kind
+    (event category or error severity), component, a highlighted snippet, and
+    the bm25 score (lower is a better match). No embeddings or semantic
+    ranking; this is exact-term/prefix matching over stored text only.
+    """
+    try:
+        return fts_search.search(_db(), query, type=type, limit=limit)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool()
+def rebuild_search_index() -> str:
+    """Recompute the FTS5 search index from current events/errors content. Requires schema v3.
+
+    Triggers keep the index live on ordinary writes; use this to repair drift
+    from a write that bypassed them, or after restoring from a SQL backup
+    (which excludes the index -- see database.backup's docstring).
+    """
+    def action():
+        result = fts_search.rebuild_search_index(_db())
+        return f"Rebuilt search index: {result['events_indexed']} events, {result['errors_indexed']} errors indexed."
     return _safely(action)
 
 
