@@ -87,7 +87,7 @@ def update_finding_status(database, finding_id, status):
                 raise ValueError(f'No finding with id {finding_id}.')
 
 
-def _format_row(row):
+def format_finding_row(row):
     subject = row['subject_entity_name'] or row['subject_text'] or '-'
     return f"[{row['id']}] ({row['status']}, {row['confidence']}) {subject}: {row['finding']}"
 
@@ -126,7 +126,7 @@ def main(argv=None):
             print(f'Recorded finding {finding_id}.')
         elif args.command == 'list':
             rows = list_findings(args.database, args.status)
-            print('\n'.join(_format_row(row) for row in rows) if rows else 'No findings recorded.')
+            print('\n'.join(format_finding_row(row) for row in rows) if rows else 'No findings recorded.')
         else:
             update_finding_status(args.database, args.finding_id, args.status)
             print(f'Finding {args.finding_id} set to {args.status}.')

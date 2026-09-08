@@ -83,6 +83,21 @@ def format_summary(result):
             f"Already known: {result['already_known']}")
 
 
+def list_entities(database, entity_type=None):
+    with closing(connect_database(database, read_only=True)) as connection:
+        validate_schema_version(connection)
+        clause, params = ('WHERE entity_type = ?', (entity_type,)) if entity_type else ('', ())
+        return connection.execute(
+            f'SELECT id, entity_type, name, canonical_name, description FROM entities {clause} ORDER BY id',
+            params).fetchall()
+
+
+def format_entities(rows):
+    if not rows:
+        return 'No entities recorded.'
+    return '\n'.join(f"[{row['id']}] ({row['entity_type']}) {row['name']}" for row in rows)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--database')

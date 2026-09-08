@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from database import db
-from database.entity_extraction import ENTITY_TYPE, extract_names, main, sync_entities
+from database.entity_extraction import ENTITY_TYPE, extract_names, format_entities, list_entities, main, sync_entities
 
 
 class ExtractNamesTests(unittest.TestCase):
@@ -161,6 +161,21 @@ class SyncEntitiesTests(unittest.TestCase):
         with redirect_stderr(error):
             self.assertEqual(main(['--database', str(Path(self.temp.name) / 'missing.db')]), 2)
         self.assertIn('Error:', error.getvalue())
+
+    def test_list_entities_empty_and_filtered_by_type(self):
+        connection = self.open_database()
+        self.assertEqual(format_entities(list_entities(self.path)), 'No entities recorded.')
+        with connection:
+            connection.execute('INSERT INTO entities (entity_type, name, canonical_name) VALUES (?, ?, ?)',
+                                (ENTITY_TYPE, 'OfficerLee', 'officerlee'))
+            connection.execute('INSERT INTO entities (entity_type, name, canonical_name) VALUES (?, ?, ?)',
+                                ('npc', 'CustomEntry', 'customentry'))
+        rows = list_entities(self.path)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(format_entities(list_entities(self.path, entity_type=ENTITY_TYPE)),
+                          '[1] (game_object) OfficerLee')
+        self.assertEqual(format_entities(list_entities(self.path, entity_type='npc')),
+                          '[2] (npc) CustomEntry')
 
 
 if __name__ == '__main__':

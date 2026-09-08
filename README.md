@@ -3,6 +3,9 @@
 A local, offline command-line analyzer for Hyland Heat / MelonLoader `.log` and
 `.txt` files. Python 3.9+; standard library only. No game, internet connection,
 dependencies, or virtual environment required. Input logs are opened read-only.
+The one exception is `database/mcp_server.py` (see
+[MCP server](#mcp-server)), which needs the `mcp` package; nothing else in
+this project does.
 
 ## PyCharm and Usage
 
@@ -578,8 +581,55 @@ edited in place. Every value is exactly what the caller supplies — nothing
 here derives a finding from stored evidence, and `context_builder.py` already
 surfaces whatever this CLI records.
 
-Phase 3 still has no research-note import, automatic findings/unknowns/decisions
-population, assembly/source scanning, patrol ingestion, FTS, embeddings,
-vector search, RAG, MCP, or LLM/model integration. `unknowns`/`decisions`
-still only get populated by hand-written SQL against the schema in
-[Schema and Design Choices](#schema-and-design-choices).
+### MCP server
+
+`database/mcp_server.py` exposes the database to a connected MCP client (an
+LLM assistant such as Claude Desktop, Claude Code, or Codex) as a set of
+tools, so that assistant can read and write research records directly
+instead of a person running each CLI by hand. This is the project's one
+feature needing a pip dependency:
+
+```bash
+pip install -r requirements-mcp.txt   # installs mcp==2.2.0; a one-time network step
+python -m database.mcp_server --database data/hylandheat.db
+```
+
+Point an MCP client's config at that command (stdio transport, the SDK's
+default) to connect it — for example, in a Claude Desktop/Claude Code style
+`mcpServers` config block:
+
+```json
+{
+  "mcpServers": {
+    "hyland-heat-research-db": {
+      "command": "python3",
+      "args": ["-m", "database.mcp_server", "--database", "data/hylandheat.db"],
+      "cwd": "/absolute/path/to/HylandHeatLogAnalyzer"
+    }
+  }
+}
+```
+
+The database path is fixed once at server startup (`--database`, defaulting
+to `data/hylandheat.db`) and is **never** a tool argument, so a connected
+client cannot redirect writes to an arbitrary path; the target database is
+initialized automatically if it does not yet exist, the same as ingestion's
+own self-init behavior. Every tool is a thin wrapper around an already
+validated module function — `add_finding`, `list_findings`,
+`update_finding_status` (`record_finding.py`), `sync_entities`,
+`list_entities` (`entity_extraction.py`), `build_context`
+(`context_builder.py`), and `inspect_database` (`inspect_db.py`) — so no new
+validation, entity-resolution, or provenance-checking logic exists here, and
+nothing here writes a finding/unknown/decision automatically from evidence.
+A validation error (e.g. an unresolvable `subject_name`, an unknown
+`finding_id`) is caught and returned as the tool's own concise error text
+(the same wording the CLI prints), rather than the SDK's generic "Error
+executing tool X", so a connected assistant can see exactly what to correct.
+
+`unknowns`/`decisions` have no MCP tools yet, matching
+[Recording findings](#recording-findings) above: they still only get
+populated by hand-written SQL against the schema in
+[Schema and Design Choices](#schema-and-design-choices). Phase 3 still has
+no research-note import, automatic findings/unknowns/decisions population,
+assembly/source scanning, patrol ingestion, FTS, embeddings, vector search,
+or RAG.
