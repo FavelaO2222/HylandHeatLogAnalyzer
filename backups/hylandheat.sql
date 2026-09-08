@@ -487,7 +487,7 @@ CREATE TABLE schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT INTO "schema_metadata" VALUES(1,3,'2026-09-08T01:58:01.369Z','2026-09-08T06:54:23.443Z');
+INSERT INTO "schema_metadata" VALUES(1,4,'2026-09-08T01:58:01.369Z','2026-09-08T16:06:46.032Z');
 CREATE TABLE source_artifacts (
     id INTEGER PRIMARY KEY,
     artifact_type TEXT NOT NULL CHECK (artifact_type IN
