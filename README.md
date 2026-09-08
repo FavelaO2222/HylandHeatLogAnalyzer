@@ -492,9 +492,14 @@ incompatible schemas, source changes, and read-only inspection.
 
 ## Research Database: Phase 3 (context builder)
 
-`database/context_builder.py` is the first Phase 3 slice: a read-only CLI that
-renders a compact, character-budgeted Markdown packet from whatever the database
-already holds, for handing to an LLM instead of raw logs or full JSON.
+`database/context_builder.py` is the first Phase 3 slice: a read-only tool —
+usable directly as a CLI, and the same functions the MCP server wraps — that
+renders a compact, character-budgeted Markdown packet from whatever the
+database already holds, for handing to an LLM (or to yourself) instead of raw
+logs or full JSON. It has two modes: **run-scoped** (evidence from one log
+ingestion) and **entity-scoped** (everything linked to one subject).
+
+### Run-scoped context
 
 ```bash
 python -m database.context_builder --database data/hylandheat.db
@@ -514,6 +519,33 @@ one is linked. Every section is capped at `--max-research-rows` and shows
 `(none recorded yet)` while those tables are empty. If the assembled packet
 would exceed `--max-chars`, later rows in whichever section hits the limit are
 dropped and a truncation footer is appended; nothing is ever cut mid-line.
+
+### Entity-scoped context
+
+As findings/unknowns/decisions/relationships accumulate, a project-wide dump
+stops being "minimal context" and starts being noise. `--entity-id`/
+`--entity-name` switches to a second mode that scopes the packet to one
+subject instead — not usable together with `--run`, since the two modes
+answer different questions ("what happened in this run" vs. "what do we know
+about this entity"):
+
+```bash
+python -m database.context_builder --database data/hylandheat.db --entity-name OfficerLee2
+python -m database.context_builder --database data/hylandheat.db --entity-id 2 --max-research-rows 5
+```
+
+`--entity-name` resolves by exact case-insensitive entity name/
+`canonical_name` match, failing clearly if ambiguous or unmatched, exactly
+like the `record_*.py` CLIs' `--subject-name`. The packet has four sections —
+Findings, Unknowns, Decisions, Relationships — each showing every row linked
+to that entity as either subject (or, for relationships, as either source or
+target), ranked the same way the run-scoped packet ranks them. The one
+deliberate difference: **every status is shown, not just active/open.** In
+the run-scoped, project-wide view, a superseded finding is noise you'd rather
+not spend budget on; here, since scope is already narrowed to one subject, a
+superseded finding or a reversed decision about *this specific entity* is
+exactly the kind of history worth seeing. Same character budget and
+truncation behavior as the run-scoped packet.
 
 The context builder only queries; it never writes, infers a finding, or
 discovers an entity.
@@ -702,9 +734,10 @@ validated module function — `add_finding`, `list_findings`,
 `add_decision`, `list_decisions`, `update_decision_status`
 (`record_decision.py`); `add_relationship`, `list_relationships`
 (`record_relationship.py`); `sync_entities`, `list_entities`
-(`entity_extraction.py`); `build_context` (`context_builder.py`);
-`inspect_database` (`inspect_db.py`); and `backup_database` (`backup.py`;
-see [Backup and restore](#backup-and-restore)) — so no new validation,
+(`entity_extraction.py`); `build_context`, `build_entity_context`
+(`context_builder.py`); `inspect_database` (`inspect_db.py`); and
+`backup_database` (`backup.py`; see [Backup and restore](#backup-and-restore))
+— so no new validation,
 entity-resolution, or provenance-checking logic exists here, and nothing
 here writes a finding/unknown/decision/relationship automatically from
 evidence.

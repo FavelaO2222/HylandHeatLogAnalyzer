@@ -14,6 +14,7 @@ import sys
 
 from .db import connect_database, validate_schema_version
 from .ingestion import PRIMARY_CATEGORIES
+from .research_records import resolve_entity_name
 
 DEFAULT_MAX_CHARS = 6000
 DEFAULT_MAX_EVENTS = 12
@@ -90,6 +91,30 @@ def _fetch_decisions(connection):
     return sorted(rows, key=lambda r: -r['id'])
 
 
+class _BudgetedWriter:
+    """Accumulates Markdown within a character budget; truncates by section, never mid-line."""
+
+    FOOTER = "\n[Budget-truncated selection; query the database directly for the remainder.]\n"
+
+    def __init__(self, header, max_chars):
+        self.text = header
+        self.budget = max_chars - len(self.FOOTER)
+        self.truncated = False
+
+    def add(self, section_lines):
+        addition = "\n".join(section_lines) + "\n"
+        if len(self.text) + len(addition) > self.budget:
+            self.truncated = True
+            return False
+        self.text += addition
+        return True
+
+    def finish(self):
+        if self.truncated:
+            self.text += self.FOOTER
+        return self.text
+
+
 def build_context(database=None, run_id=None, max_chars=DEFAULT_MAX_CHARS,
                    max_events=DEFAULT_MAX_EVENTS, max_research_rows=DEFAULT_MAX_RESEARCH_ROWS):
     """Render the packet; truncates by section rather than mid-line."""
@@ -104,19 +129,8 @@ def build_context(database=None, run_id=None, max_chars=DEFAULT_MAX_CHARS,
 
         header = (f"# Research Context: Run #{run['id']} ({run['profile'] or 'no profile'})\n"
                   f"Result: {run['result']} | Source: {run['path'] or 'unknown'}\n")
-        footer = "\n[Budget-truncated selection; query the database directly for the remainder.]\n"
-        text = header
-        budget = max_chars - len(footer)
-        truncated = False
-
-        def add(section_lines):
-            nonlocal text, truncated
-            addition = "\n".join(section_lines) + "\n"
-            if len(text) + len(addition) > budget:
-                truncated = True
-                return False
-            text += addition
-            return True
+        writer = _BudgetedWriter(header, max_chars)
+        add = writer.add
 
         add([f"\n## Errors ({len(errors)})"])
         if not errors:
@@ -163,21 +177,135 @@ def build_context(database=None, run_id=None, max_chars=DEFAULT_MAX_CHARS,
             if not add([f"- {decision['topic']}: {decision['decision']} — {decision['reason']}"]):
                 break
 
-        if truncated:
-            text += footer
-        return text
+        return writer.finish()
+
+
+def _fetch_entity(connection, entity_id):
+    row = connection.execute(
+        'SELECT id, entity_type, name, canonical_name, description FROM entities WHERE id = ?',
+        (entity_id,)).fetchone()
+    if row is None:
+        raise ValueError(f'No entity with id {entity_id}.')
+    return row
+
+
+def _fetch_entity_findings(connection, entity_id):
+    rows = connection.execute(
+        'SELECT id, finding, confidence, status FROM findings WHERE subject_entity_id = ?',
+        (entity_id,)).fetchall()
+    return sorted(rows, key=lambda r: (CONFIDENCE_ORDER.get(r['confidence'], 4), -r['id']))
+
+
+def _fetch_entity_unknowns(connection, entity_id):
+    rows = connection.execute(
+        'SELECT id, question, importance, status FROM unknowns WHERE subject_entity_id = ?',
+        (entity_id,)).fetchall()
+    return sorted(rows, key=lambda r: (IMPORTANCE_ORDER.get(r['importance'], 4), -r['id']))
+
+
+def _fetch_entity_decisions(connection, entity_id):
+    rows = connection.execute(
+        'SELECT id, topic, decision, reason, status FROM decisions WHERE subject_entity_id = ?',
+        (entity_id,)).fetchall()
+    return sorted(rows, key=lambda r: -r['id'])
+
+
+def _fetch_entity_relationships(connection, entity_id):
+    rows = connection.execute('''
+        SELECT r.id, r.relationship_type, r.notes, s.name AS source_name, t.name AS target_name
+        FROM relationships r
+        JOIN entities s ON s.id = r.source_entity_id
+        JOIN entities t ON t.id = r.target_entity_id
+        WHERE r.source_entity_id = ? OR r.target_entity_id = ?''', (entity_id, entity_id)).fetchall()
+    return sorted(rows, key=lambda r: -r['id'])
+
+
+def build_entity_context(database=None, entity_id=None, entity_name=None,
+                         max_chars=DEFAULT_MAX_CHARS, max_research_rows=DEFAULT_MAX_RESEARCH_ROWS):
+    """Render everything linked to one entity: its findings, unknowns, decisions, and
+    relationships in either direction. Unlike build_context, every status is shown (not just
+    active/open) since scope is already narrowed to one subject, so a superseded finding or a
+    reversed decision about this entity is signal, not noise, here. Read-only; infers nothing.
+    """
+    if entity_id is not None and entity_name is not None:
+        raise ValueError('Specify only one of entity_id or entity_name.')
+    if entity_id is None and entity_name is None:
+        raise ValueError('An entity is required: specify entity_id or entity_name.')
+    with closing(connect_database(database, read_only=True)) as connection:
+        validate_schema_version(connection)
+        if entity_name is not None:
+            entity_id = resolve_entity_name(connection, entity_name)
+        entity = _fetch_entity(connection, entity_id)
+        findings = _fetch_entity_findings(connection, entity_id)
+        unknowns = _fetch_entity_unknowns(connection, entity_id)
+        decisions = _fetch_entity_decisions(connection, entity_id)
+        relationships = _fetch_entity_relationships(connection, entity_id)
+
+        header = f"# Entity Context: {entity['name']} ({entity['entity_type']})\n"
+        if entity['description']:
+            header += f"{entity['description']}\n"
+        writer = _BudgetedWriter(header, max_chars)
+        add = writer.add
+
+        shown_findings = findings[:max_research_rows]
+        add([f"\n## Findings (top {len(shown_findings)} of {len(findings)})"])
+        if not shown_findings:
+            add(["(none recorded)"])
+        for finding in shown_findings:
+            if not add([f"- [{finding['status']}, {finding['confidence']}] {finding['finding']}"]):
+                break
+
+        shown_unknowns = unknowns[:max_research_rows]
+        add([f"\n## Unknowns (top {len(shown_unknowns)} of {len(unknowns)})"])
+        if not shown_unknowns:
+            add(["(none recorded)"])
+        for unknown in shown_unknowns:
+            if not add([f"- [{unknown['status']}, {unknown['importance']}] {unknown['question']}"]):
+                break
+
+        shown_decisions = decisions[:max_research_rows]
+        add([f"\n## Decisions (top {len(shown_decisions)} of {len(decisions)})"])
+        if not shown_decisions:
+            add(["(none recorded)"])
+        for decision in shown_decisions:
+            if not add([f"- [{decision['status']}] {decision['topic']}: {decision['decision']} — {decision['reason']}"]):
+                break
+
+        shown_relationships = relationships[:max_research_rows]
+        add([f"\n## Relationships (top {len(shown_relationships)} of {len(relationships)})"])
+        if not shown_relationships:
+            add(["(none recorded)"])
+        for relationship in shown_relationships:
+            notes = f" ({relationship['notes']})" if relationship['notes'] else ''
+            if not add([f"- [{relationship['id']}] {relationship['source_name']} "
+                        f"{relationship['relationship_type']} {relationship['target_name']}{notes}"]):
+                break
+
+        return writer.finish()
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--database')
-    parser.add_argument('--run', type=int, help='Specific test run id; defaults to the latest run.')
+    parser.add_argument('--run', type=int, help='Specific test run id; defaults to the latest run. '
+                        'Not used together with --entity-id/--entity-name.')
+    entity = parser.add_mutually_exclusive_group()
+    entity.add_argument('--entity-id', type=int, help='Switch to entity-scoped context for this entity.')
+    entity.add_argument('--entity-name', help='Switch to entity-scoped context, resolved by exact '
+                        'case-insensitive entity name/canonical_name match.')
     parser.add_argument('--max-chars', type=int, default=DEFAULT_MAX_CHARS)
     parser.add_argument('--max-events', type=int, default=DEFAULT_MAX_EVENTS)
     parser.add_argument('--max-research-rows', type=int, default=DEFAULT_MAX_RESEARCH_ROWS)
     args = parser.parse_args(argv)
     try:
-        print(build_context(args.database, args.run, args.max_chars, args.max_events, args.max_research_rows), end="")
+        if args.entity_id is not None or args.entity_name is not None:
+            if args.run is not None:
+                raise ValueError('--run is not used together with --entity-id/--entity-name.')
+            text = build_entity_context(args.database, entity_id=args.entity_id, entity_name=args.entity_name,
+                                        max_chars=args.max_chars, max_research_rows=args.max_research_rows)
+        else:
+            text = build_context(args.database, args.run, args.max_chars, args.max_events, args.max_research_rows)
+        print(text, end="")
     except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
         print(f'Error: {exc}', file=sys.stderr)
         return 2

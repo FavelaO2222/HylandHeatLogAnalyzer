@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from database import db
-from database.context_builder import build_context, main
+from database.context_builder import build_context, build_entity_context, main
 
 
 class ContextBuilderTests(unittest.TestCase):
@@ -185,6 +185,133 @@ class ContextBuilderTests(unittest.TestCase):
         with redirect_stderr(error):
             self.assertEqual(main(['--database', str(Path(self.temp.name) / 'missing.db')]), 2)
         self.assertIn('Error:', error.getvalue())
+
+
+class EntityContextBuilderTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / 'research.db'
+        db.initialize_database(self.path)
+        self.connection = db.connect_database(self.path)
+        self.addCleanup(self.connection.close)
+
+    def entity(self, name, entity_type='game_object', description=None):
+        with self.connection:
+            return self.connection.execute(
+                'INSERT INTO entities (entity_type, name, canonical_name, description) VALUES (?, ?, ?, ?)',
+                (entity_type, name, name.lower(), description)).lastrowid
+
+    def test_requires_exactly_one_of_entity_id_or_entity_name(self):
+        with self.assertRaisesRegex(ValueError, 'An entity is required'):
+            build_entity_context(self.path)
+        entity_id = self.entity('OfficerLee')
+        with self.assertRaisesRegex(ValueError, 'only one of entity_id or entity_name'):
+            build_entity_context(self.path, entity_id=entity_id, entity_name='OfficerLee')
+
+    def test_nonexistent_entity_id_raises(self):
+        with self.assertRaisesRegex(ValueError, 'No entity with id 999'):
+            build_entity_context(self.path, entity_id=999)
+
+    def test_unresolvable_entity_name_raises(self):
+        with self.assertRaisesRegex(ValueError, "No entity named 'Nobody'"):
+            build_entity_context(self.path, entity_name='Nobody')
+
+    def test_header_includes_name_type_and_description(self):
+        self.entity('OfficerLee2', entity_type='game_object', description='A disposable SWAT clone')
+        text = build_entity_context(self.path, entity_name='officerlee2')
+        self.assertIn('# Entity Context: OfficerLee2 (game_object)', text)
+        self.assertIn('A disposable SWAT clone', text)
+
+    def test_empty_sections_show_placeholders(self):
+        entity_id = self.entity('OfficerLee')
+        text = build_entity_context(self.path, entity_id=entity_id)
+        self.assertIn('## Findings (top 0 of 0)\n(none recorded)', text)
+        self.assertIn('## Unknowns (top 0 of 0)\n(none recorded)', text)
+        self.assertIn('## Decisions (top 0 of 0)\n(none recorded)', text)
+        self.assertIn('## Relationships (top 0 of 0)\n(none recorded)', text)
+
+    def test_shows_every_status_not_just_active_open(self):
+        entity_id = self.entity('OfficerLee2')
+        with self.connection:
+            self.connection.execute(
+                'INSERT INTO findings (subject_entity_id, finding, status) VALUES (?, ?, ?)',
+                (entity_id, 'Superseded note', 'superseded'))
+            self.connection.execute(
+                'INSERT INTO unknowns (subject_entity_id, question, status) VALUES (?, ?, ?)',
+                (entity_id, 'Resolved question', 'resolved'))
+            self.connection.execute(
+                'INSERT INTO decisions (subject_entity_id, topic, decision, reason, status) VALUES (?, ?, ?, ?, ?)',
+                (entity_id, 'topic', 'decision', 'reason', 'reversed'))
+        text = build_entity_context(self.path, entity_id=entity_id)
+        self.assertIn('[superseded,', text)
+        self.assertIn('Superseded note', text)
+        self.assertIn('[resolved,', text)
+        self.assertIn('Resolved question', text)
+        self.assertIn('[reversed] topic:', text)
+
+    def test_relationships_shown_in_either_direction(self):
+        lee = self.entity('OfficerLee')
+        lee2 = self.entity('OfficerLee2')
+        other = self.entity('OfficerDavis')
+        with self.connection:
+            self.connection.execute(
+                'INSERT INTO relationships (source_entity_id, relationship_type, target_entity_id, notes) '
+                'VALUES (?, ?, ?, ?)', (lee2, 'IS_CLONE_OF', lee, 'Matched SceneId'))
+            self.connection.execute(
+                'INSERT INTO relationships (source_entity_id, relationship_type, target_entity_id) '
+                'VALUES (?, ?, ?)', (other, 'IS_A', other))
+        text = build_entity_context(self.path, entity_id=lee)
+        self.assertIn('OfficerLee2 IS_CLONE_OF OfficerLee (Matched SceneId)', text)
+        self.assertIn('## Relationships (top 1 of 1)', text)
+
+    def test_findings_ranked_by_confidence(self):
+        entity_id = self.entity('OfficerLee2')
+        with self.connection:
+            self.connection.execute(
+                'INSERT INTO findings (subject_entity_id, finding, confidence) VALUES (?, ?, ?)',
+                (entity_id, 'Weak claim', 'tentative'))
+            self.connection.execute(
+                'INSERT INTO findings (subject_entity_id, finding, confidence) VALUES (?, ?, ?)',
+                (entity_id, 'Strong claim', 'confirmed'))
+        text = build_entity_context(self.path, entity_id=entity_id)
+        self.assertLess(text.index('Strong claim'), text.index('Weak claim'))
+
+    def test_max_research_rows_caps_shown_count(self):
+        entity_id = self.entity('OfficerLee2')
+        with self.connection:
+            for n in range(5):
+                self.connection.execute('INSERT INTO findings (subject_entity_id, finding) VALUES (?, ?)',
+                                        (entity_id, f'Finding {n}'))
+        text = build_entity_context(self.path, entity_id=entity_id, max_research_rows=2)
+        self.assertIn('## Findings (top 2 of 5)', text)
+
+    def test_max_chars_budget_truncates_and_appends_footer(self):
+        entity_id = self.entity('OfficerLee2')
+        with self.connection:
+            for n in range(20):
+                self.connection.execute('INSERT INTO findings (subject_entity_id, finding) VALUES (?, ?)',
+                                        (entity_id, f'Finding number {n}'))
+        text = build_entity_context(self.path, entity_id=entity_id, max_chars=300, max_research_rows=20)
+        self.assertLessEqual(len(text), 300)
+        self.assertIn('Budget-truncated selection', text)
+
+    def test_cli_entity_mode_success_and_error_paths(self):
+        self.entity('OfficerLee2', description='A disposable SWAT clone')
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(['--database', str(self.path), '--entity-name', 'OfficerLee2']), 0)
+        self.assertIn('Entity Context: OfficerLee2', output.getvalue())
+
+        error = io.StringIO()
+        with redirect_stderr(error):
+            self.assertEqual(
+                main(['--database', str(self.path), '--entity-name', 'OfficerLee2', '--run', '1']), 2)
+        self.assertIn('Error:', error.getvalue())
+
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            main(['--database', str(self.path), '--entity-id', '1', '--entity-name', 'OfficerLee2'])
+        self.assertEqual(raised.exception.code, 2)
 
 
 if __name__ == '__main__':

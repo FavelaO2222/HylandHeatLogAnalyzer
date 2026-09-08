@@ -219,6 +219,24 @@ def build_context(run_id: int | None = None, max_chars: int = 6000, max_events: 
 
 
 @mcp.tool()
+def build_entity_context(entity_id: int | None = None, entity_name: str | None = None,
+                         max_chars: int = 6000, max_research_rows: int = 12) -> str:
+    """Render everything linked to one entity: its findings, unknowns, decisions, and
+    relationships in either direction. Prefer this over build_context when the question is about
+    a specific subject (e.g. 'what do we know about OfficerLee2') rather than one test run — it
+    scopes the packet instead of showing project-wide state, so limited context goes further.
+    Unlike build_context, every status is shown here (not just active/open), since scope is
+    already narrowed to one subject: a superseded finding or a reversed decision about this
+    entity is signal, not noise. entity_name resolves by exact case-insensitive entity name/
+    canonical_name match and fails clearly if ambiguous or unmatched; exactly one of entity_id or
+    entity_name is required.
+    """
+    return _safely(lambda: context_builder.build_entity_context(
+        _db(), entity_id=entity_id, entity_name=entity_name, max_chars=max_chars,
+        max_research_rows=max_research_rows))
+
+
+@mcp.tool()
 def inspect_database(latest_run: bool = False) -> str:
     """Read-only table-count overview of the research database, optionally with the latest test run's summary."""
     return _safely(lambda: inspect_db.inspect_database(_db(), latest_run))

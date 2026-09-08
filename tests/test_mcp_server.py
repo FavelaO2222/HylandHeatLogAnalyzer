@@ -15,9 +15,10 @@ from unittest.mock import patch
 
 from database import db, mcp_server
 from database.mcp_server import (
-    add_decision, add_finding, add_relationship, add_unknown, backup_database, build_context, configure,
-    inspect_database, list_decisions, list_entities, list_findings, list_relationships, list_unknowns, mcp,
-    sync_entities, update_decision_status, update_finding_status, update_unknown_status,
+    add_decision, add_finding, add_relationship, add_unknown, backup_database, build_context,
+    build_entity_context, configure, inspect_database, list_decisions, list_entities, list_findings,
+    list_relationships, list_unknowns, mcp, sync_entities, update_decision_status, update_finding_status,
+    update_unknown_status,
 )
 
 
@@ -144,6 +145,20 @@ class McpServerToolTests(unittest.TestCase):
     def test_build_context_error_on_no_runs(self):
         self.assertTrue(build_context().startswith('Error: No test runs'))
 
+    def test_build_entity_context_reflects_recorded_finding(self):
+        self.seed_run_with_identity_event()
+        sync_entities()
+        add_finding('Clone shares identity', subject_name='OfficerLee')
+        text = build_entity_context(entity_name='OfficerLee')
+        self.assertIn('Entity Context: OfficerLee', text)
+        self.assertIn('Clone shares identity', text)
+
+    def test_build_entity_context_error_on_unresolvable_name(self):
+        self.assertTrue(build_entity_context(entity_name='Nobody').startswith("Error: No entity named 'Nobody'"))
+
+    def test_build_entity_context_requires_an_entity(self):
+        self.assertTrue(build_entity_context().startswith('Error: An entity is required'))
+
     def test_inspect_database(self):
         self.seed_run_with_identity_event()
         summary = inspect_database(latest_run=True)
@@ -198,8 +213,8 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
                              'add_unknown', 'list_unknowns', 'update_unknown_status',
                              'add_decision', 'list_decisions', 'update_decision_status',
                              'add_relationship', 'list_relationships',
-                             'sync_entities', 'list_entities', 'build_context', 'inspect_database',
-                             'backup_database'):
+                             'sync_entities', 'list_entities', 'build_context', 'build_entity_context',
+                             'inspect_database', 'backup_database'):
                 self.assertIn(expected, names)
 
             result = await client.call_tool('add_finding', {'finding': 'Protocol round trip works'})
