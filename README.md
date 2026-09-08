@@ -7,9 +7,16 @@ The one exception is `database/mcp_server.py` (see
 [MCP server](#mcp-server)), which needs the `mcp` package; nothing else in
 this project does.
 
-Current milestone: **Phase 4A — Evidence Provenance and Run Comparison**,
-using database schema v2. See [Phase 4A](#phase-4a-evidence-provenance-and-run-comparison)
-for migration, commands, comparison rules, and the Phase 4B boundary.
+Companion project: [HylandHeat](https://github.com/FavelaO2222/HylandHeat) is
+the MelonLoader mod this analyzer's logs and research database are about —
+`tools/analyze-after-game.sh` there is the Steam-launch-options wrapper that
+feeds this analyzer, and `--mod-repo` here (see
+[Phase 4B](#phase-4b-full-text-search-fts5)) records that repo's commit
+against an imported test run.
+
+Current milestone: **Phase 4B — Full-Text Search (FTS5) and mod source-revision
+capture**, using database schema v3. See [Phase 4B](#phase-4b-full-text-search-fts5)
+for migration, commands, and remaining candidates.
 Structured and deterministic retrieval first. Semantic retrieval only where
 exact retrieval eventually proves insufficient.
 
