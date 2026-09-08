@@ -44,7 +44,7 @@ def _summary(connection, target, artifact_id, run_id, duplicate):
             "errors": connection.execute('SELECT count(*) FROM errors WHERE test_run_id=?', (run_id,)).fetchone()[0]}
 
 
-def import_analysis_result(report, capture, database):
+def import_analysis_result(report, capture, database, *, mod_build=None):
     if not capture.complete or capture.source != Path(report["metadata"]["source_path"]).resolve():
         raise ValueError("Import requires completed capture from this analysis, including full traces.")
     capture.verify_source()
@@ -75,9 +75,9 @@ def import_analysis_result(report, capture, database):
                 ('log', str(capture.source), capture.source.name, capture.sha256,
                  'Raw log; path records first registration. Original creation time is unknown.')).lastrowid
             run_id = connection.execute('''INSERT INTO test_runs
-                (source_artifact_id, started_at, profile, result) VALUES (?, ?, ?, ?)''',
+                (source_artifact_id, started_at, profile, result, mod_build) VALUES (?, ?, ?, ?, ?)''',
                 (artifact_id, report['metadata']['first_timestamp'], report['profile'],
-                 RESULTS.get(report['verdict'], 'UNKNOWN'))).lastrowid
+                 RESULTS.get(report['verdict'], 'UNKNOWN'), mod_build)).lastrowid
             manifest = {"importer": IMPORTER, "analysis_schema": report['schema_version'],
                         "original_verdict": report['verdict'], "analyzed_path": str(capture.source),
                         "expected_rejection_lines": report['expected_rejection_lines'],
@@ -110,10 +110,10 @@ def import_analysis_result(report, capture, database):
             return _summary(connection, target, artifact_id, run_id, False)
 
 
-def persist_analysis(report, capture, database):
+def persist_analysis(report, capture, database, *, mod_build=None):
     """Expose a concise CLI-compatible failure without importing sqlite in the parser."""
     try:
-        return import_analysis_result(report, capture, database)
+        return import_analysis_result(report, capture, database, mod_build=mod_build)
     except sqlite3.Error as exc:
         raise ValueError(f"Database import failed: {exc}") from exc
 

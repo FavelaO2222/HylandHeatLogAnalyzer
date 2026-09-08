@@ -365,20 +365,26 @@ def main(argv=None):
     parser.add_argument("--profile", choices=PROFILES, default="general", help="Explicit test requirements")
     parser.add_argument("--brief", action="store_true", help="Also write an AI brief capped at 6000 characters")
     parser.add_argument("--database", help="Optionally import evidence into a project-relative or absolute SQLite database")
+    parser.add_argument("--mod-repo", type=Path,
+                        help="Optional mod source repo path; its git commit (and dirty state) is recorded as "
+                             "the imported test run's mod_build. Only meaningful together with --database.")
     args = parser.parse_args(argv)
     try:
-        capture, database_path, imported = None, None, None
+        capture, database_path, imported, mod_build = None, None, None, None
         if args.database is not None:
             from analysis_capture import AnalysisCapture
             from database.ingestion import persist_analysis, validate_destination, format_import_summary
             capture = AnalysisCapture()
             database_path = validate_destination(args.database, args.log_file)
+            if args.mod_repo is not None:
+                from database.source_revision import capture_revision
+                mod_build = capture_revision(args.mod_repo)
         report = analyze(args.log_file, args.profile, capture=capture)
         output = args.output if args.output is not None else Path(report["metadata"]["source_path"]).parent / "reports"
         paths = write_reports(report, output, not args.no_json, args.csv, args.brief,
                               protected_paths=(database_path,) if database_path is not None else ())
         if database_path is not None:
-            imported = persist_analysis(report, capture, database_path)
+            imported = persist_analysis(report, capture, database_path, mod_build=mod_build)
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2

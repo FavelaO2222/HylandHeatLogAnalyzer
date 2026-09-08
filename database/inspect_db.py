@@ -20,7 +20,7 @@ def inspect_database(database=None, latest_run=False):
         lines = [f'Database schema: {version}', '']
         lines.extend(f"{table.replace('_', ' ').capitalize()}: {count}" for table, count in counts.items())
         if latest_run:
-            row = connection.execute('''SELECT t.id, t.profile, t.result, a.path
+            row = connection.execute('''SELECT t.id, t.profile, t.result, t.mod_build, a.path
                 FROM test_runs t LEFT JOIN source_artifacts a ON a.id=t.source_artifact_id
                 ORDER BY t.id DESC LIMIT 1''').fetchone()
             lines.extend(['', 'Latest Test Run'])
@@ -31,6 +31,8 @@ def inspect_database(database=None, latest_run=False):
                 for table in ('events', 'errors'):
                     count = connection.execute(f'SELECT count(*) FROM {table} WHERE test_run_id=?', (row['id'],)).fetchone()[0]
                     lines.append(f'{table.capitalize()}: {count}')
+                if row['mod_build'] is not None:
+                    lines.append(f"Mod build: {row['mod_build']}")
                 lines.append(f"Source: {row['path']}")
         return '\n'.join(lines)
 

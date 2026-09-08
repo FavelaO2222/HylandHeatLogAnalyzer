@@ -41,9 +41,9 @@ class IngestionTests(unittest.TestCase):
         report = analyze(source or self.source, profile, capture=capture)
         return report, capture
 
-    def import_log(self, profile='read-only-audit', source=None):
+    def import_log(self, profile='read-only-audit', source=None, mod_build=None):
         report, capture = self.prepare(profile, source)
-        result = import_analysis_result(report, capture, self.database)
+        result = import_analysis_result(report, capture, self.database, mod_build=mod_build)
         return report, result
 
     def test_artifact_hash_path_and_raw_unchanged(self):
@@ -69,6 +69,19 @@ class IngestionTests(unittest.TestCase):
             self.assertIsNone(run['game_build'])
             self.assertIsNone(run['mod_build'])
             self.assertEqual(json.loads(run['notes'])['original_verdict'], report['verdict'])
+
+    def test_mod_build_is_stored_when_provided_and_preserved_on_dedup(self):
+        _, first = self.import_log(mod_build='abc1234')
+        with closing(connect_database(self.database)) as connection:
+            self.assertEqual(connection.execute('SELECT mod_build FROM test_runs WHERE id=?',
+                                                 (first['test_run_id'],)).fetchone()[0], 'abc1234')
+        # A duplicate import with a *different* mod_build reuses the existing
+        # run untouched -- dedup never mutates an existing row, here or elsewhere.
+        _, second = self.import_log(mod_build='def5678')
+        self.assertTrue(second['duplicate'])
+        with closing(connect_database(self.database)) as connection:
+            self.assertEqual(connection.execute('SELECT mod_build FROM test_runs WHERE id=?',
+                                                 (second['test_run_id'],)).fetchone()[0], 'abc1234')
 
     def test_inconclusive_maps_to_incomplete(self):
         self.source.write_text('ordinary chatter\n', encoding='utf-8')
@@ -238,6 +251,46 @@ class IngestionTests(unittest.TestCase):
         self.assertEqual(before, self.source.read_bytes())
         self.assertFalse((self.root / 'session_summary.txt').exists())
 
+    def mod_repo(self):
+        repo = self.root / 'mod-repo'
+        repo.mkdir()
+        subprocess.run(['git', '-C', str(repo), 'init', '-q'], check=True)
+        subprocess.run(['git', '-C', str(repo), 'config', 'user.email', 'test@example.com'], check=True)
+        subprocess.run(['git', '-C', str(repo), 'config', 'user.name', 'Test'], check=True)
+        (repo / 'a.cs').write_text('// a\n', encoding='utf-8')
+        subprocess.run(['git', '-C', str(repo), 'add', 'a.cs'], check=True)
+        subprocess.run(['git', '-C', str(repo), 'commit', '-q', '-m', 'initial'], check=True)
+        return repo
+
+    def test_cli_mod_repo_populates_mod_build(self):
+        repo = self.mod_repo()
+        sha = subprocess.run(['git', '-C', str(repo), 'rev-parse', '--short', 'HEAD'],
+                             check=True, capture_output=True, text=True).stdout.strip()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main([str(self.source), '--output', str(self.root / 'reports'),
+                                   '--database', str(self.database), '--mod-repo', str(repo)]), 0)
+        with closing(connect_database(self.database)) as connection:
+            self.assertEqual(connection.execute('SELECT mod_build FROM test_runs').fetchone()[0], sha)
+
+    def test_cli_mod_repo_without_database_is_unused(self):
+        repo = self.mod_repo()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main([str(self.source), '--output', str(self.root / 'reports'),
+                                   '--mod-repo', str(repo)]), 0)
+        self.assertFalse(self.database.exists())
+
+    def test_cli_invalid_mod_repo_is_rejected(self):
+        not_a_repo = self.root / 'not-a-repo'
+        not_a_repo.mkdir()
+        error = io.StringIO()
+        with redirect_stderr(error):
+            self.assertEqual(main([str(self.source), '--output', str(self.root / 'reports'),
+                                   '--database', str(self.database), '--mod-repo', str(not_a_repo)]), 2)
+        self.assertIn('Error:', error.getvalue())
+        self.assertFalse(self.database.exists())
+
     def test_inspection_is_read_only_and_no_research_records_created(self):
         self.import_log()
         before = self.database.read_bytes()
@@ -254,6 +307,12 @@ class IngestionTests(unittest.TestCase):
         with self.assertRaises(sqlite3.Error):
             inspect_database(missing)
         self.assertFalse(missing.exists())
+
+    def test_inspect_shows_mod_build_only_when_set(self):
+        self.import_log()
+        self.assertNotIn('Mod build', inspect_database(self.database, True))
+        self.import_log(profile='general', mod_build='abc1234')
+        self.assertIn('Mod build: abc1234', inspect_database(self.database, True))
 
     def test_real_audit_regression(self):
         configured = os.environ.get('HYLAND_HEAT_AUDIT_LOG')
