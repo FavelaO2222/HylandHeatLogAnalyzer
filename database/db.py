@@ -8,8 +8,8 @@ from typing import Optional, Union
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = Path(__file__).resolve().with_name('schema.sql')
-SCHEMA_VERSION = 2
-SUPPORTED_VERSIONS = (1, 2)
+SCHEMA_VERSION = 3
+SUPPORTED_VERSIONS = (1, 2, 3)
 DatabasePath = Optional[Union[str, Path]]
 
 
@@ -63,10 +63,15 @@ def _check_version(connection: sqlite3.Connection) -> None:
 
 
 def initialize_database(database: DatabasePath = None) -> Path:
-    """Create/reapply v2, or explicitly migrate v1 to v2 without changing existing rows.
+    """Create/reapply v3, or explicitly migrate an older database to v3 without changing existing rows.
 
-    The only v1 -> v2 DDL is the additive evidence_links table and its indexes.
-    Read-only operations and existing writers never migrate implicitly.
+    schema.sql is always the full, current, idempotent schema (every statement
+    is IF NOT EXISTS/OR IGNORE), so applying it to an older database additively
+    brings it straight to v3 in one pass regardless of its starting version --
+    v1 -> v2 added evidence_links; v1/v2 -> v3 additionally adds the events_fts/
+    errors_fts search index and its sync triggers (see schema.sql), rebuilt from
+    current events/errors content as part of that same script. Read-only
+    operations and existing writers never migrate implicitly.
     """
     path = resolve_database_path(database)
     schema = SCHEMA_PATH.read_text(encoding='utf-8')
@@ -77,9 +82,12 @@ def initialize_database(database: DatabasePath = None) -> Path:
             # executescript commits any pending transaction before starting, so
             # BEGIN belongs in the script. DDL and version insertion roll back together.
             connection.executescript('BEGIN IMMEDIATE;\n' + schema)
+            # schema_version < SCHEMA_VERSION (rather than == some single prior
+            # version) lets one script jump a database straight from v1 or v2 to
+            # v3; it is a no-op once the database is already at SCHEMA_VERSION.
             connection.execute("""UPDATE schema_metadata SET schema_version=?,
                 updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                WHERE id=1 AND schema_version=1""", (SCHEMA_VERSION,))
+                WHERE id=1 AND schema_version<?""", (SCHEMA_VERSION, SCHEMA_VERSION))
             _check_version(connection)
             connection.commit()
         except Exception:

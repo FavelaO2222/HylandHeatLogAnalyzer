@@ -487,7 +487,7 @@ CREATE TABLE schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT INTO "schema_metadata" VALUES(1,2,'2026-09-08T01:58:01.369Z','2026-09-08T05:44:16.245Z');
+INSERT INTO "schema_metadata" VALUES(1,3,'2026-09-08T01:58:01.369Z','2026-09-08T06:54:23.443Z');
 CREATE TABLE source_artifacts (
     id INTEGER PRIMARY KEY,
     artifact_type TEXT NOT NULL CHECK (artifact_type IN
@@ -567,4 +567,32 @@ CREATE INDEX idx_evidence_links_event ON evidence_links (event_id);
 CREATE INDEX idx_evidence_links_error ON evidence_links (error_id);
 CREATE INDEX idx_evidence_links_entity ON evidence_links (entity_id);
 CREATE INDEX idx_evidence_links_relationship ON evidence_links (relationship_id);
+CREATE TRIGGER events_fts_ai AFTER INSERT ON events BEGIN
+    INSERT INTO events_fts(rowid, message, component, category, event_type)
+    VALUES (new.id, new.message, new.component, new.category, new.event_type);
+END;
+CREATE TRIGGER events_fts_ad AFTER DELETE ON events BEGIN
+    INSERT INTO events_fts(events_fts, rowid, message, component, category, event_type)
+    VALUES ('delete', old.id, old.message, old.component, old.category, old.event_type);
+END;
+CREATE TRIGGER events_fts_au AFTER UPDATE ON events BEGIN
+    INSERT INTO events_fts(events_fts, rowid, message, component, category, event_type)
+    VALUES ('delete', old.id, old.message, old.component, old.category, old.event_type);
+    INSERT INTO events_fts(rowid, message, component, category, event_type)
+    VALUES (new.id, new.message, new.component, new.category, new.event_type);
+END;
+CREATE TRIGGER errors_fts_ai AFTER INSERT ON errors BEGIN
+    INSERT INTO errors_fts(rowid, message, component, stack_trace)
+    VALUES (new.id, new.message, new.component, new.stack_trace);
+END;
+CREATE TRIGGER errors_fts_ad AFTER DELETE ON errors BEGIN
+    INSERT INTO errors_fts(errors_fts, rowid, message, component, stack_trace)
+    VALUES ('delete', old.id, old.message, old.component, old.stack_trace);
+END;
+CREATE TRIGGER errors_fts_au AFTER UPDATE ON errors BEGIN
+    INSERT INTO errors_fts(errors_fts, rowid, message, component, stack_trace)
+    VALUES ('delete', old.id, old.message, old.component, old.stack_trace);
+    INSERT INTO errors_fts(rowid, message, component, stack_trace)
+    VALUES (new.id, new.message, new.component, new.stack_trace);
+END;
 COMMIT;

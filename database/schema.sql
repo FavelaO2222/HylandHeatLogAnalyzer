@@ -1,4 +1,4 @@
--- Authoritative fresh-database schema v2. db.initialize_database migrates v1 explicitly.
+-- Authoritative fresh-database schema v3. db.initialize_database migrates v1/v2 explicitly.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 2);
+INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 3);
 
 -- Raw evidence references. created_at is the optional original artifact time.
 CREATE TABLE IF NOT EXISTS source_artifacts (
@@ -72,6 +72,61 @@ CREATE TABLE IF NOT EXISTS errors (
 CREATE INDEX IF NOT EXISTS idx_errors_run_timestamp ON errors (test_run_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_errors_artifact_line ON errors (source_artifact_id, source_line);
 CREATE INDEX IF NOT EXISTS idx_errors_severity ON errors (severity);
+
+-- FTS5 search index (schema v3) begin --
+-- events_fts/errors_fts are external-content FTS5 indexes (content=events/errors,
+-- content_rowid=id): events/errors stay the only source of truth, these virtual
+-- tables only ever hold a derived search index over their text columns. Kept
+-- live by the AFTER INSERT/UPDATE/DELETE triggers below on every write; the
+-- trailing 'rebuild' commands recompute the whole index from current
+-- events/errors content every time this script runs (fresh init, an explicit
+-- v1/v2 -> v3 migration, or a plain reapply) -- idempotent and cheap at this
+-- project's scale, so no separate drift-detection logic is needed here.
+-- database.search.rebuild_search_index() exposes the same 'rebuild' command
+-- standalone (CLI --rebuild / MCP rebuild_search_index) for repairing drift
+-- from any write that bypassed these triggers (e.g. a raw sqlite3 connection).
+-- database.backup excludes these tables from SQL dumps and recreates them
+-- (via the fragment between these two markers) after a restore -- see that
+-- module's docstring for why a plain dump/restore cannot round-trip FTS5's
+-- internal shadow-table state.
+CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+    message, component, category, event_type, content='events', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS errors_fts USING fts5(
+    message, component, stack_trace, content='errors', content_rowid='id');
+
+CREATE TRIGGER IF NOT EXISTS events_fts_ai AFTER INSERT ON events BEGIN
+    INSERT INTO events_fts(rowid, message, component, category, event_type)
+    VALUES (new.id, new.message, new.component, new.category, new.event_type);
+END;
+CREATE TRIGGER IF NOT EXISTS events_fts_ad AFTER DELETE ON events BEGIN
+    INSERT INTO events_fts(events_fts, rowid, message, component, category, event_type)
+    VALUES ('delete', old.id, old.message, old.component, old.category, old.event_type);
+END;
+CREATE TRIGGER IF NOT EXISTS events_fts_au AFTER UPDATE ON events BEGIN
+    INSERT INTO events_fts(events_fts, rowid, message, component, category, event_type)
+    VALUES ('delete', old.id, old.message, old.component, old.category, old.event_type);
+    INSERT INTO events_fts(rowid, message, component, category, event_type)
+    VALUES (new.id, new.message, new.component, new.category, new.event_type);
+END;
+
+CREATE TRIGGER IF NOT EXISTS errors_fts_ai AFTER INSERT ON errors BEGIN
+    INSERT INTO errors_fts(rowid, message, component, stack_trace)
+    VALUES (new.id, new.message, new.component, new.stack_trace);
+END;
+CREATE TRIGGER IF NOT EXISTS errors_fts_ad AFTER DELETE ON errors BEGIN
+    INSERT INTO errors_fts(errors_fts, rowid, message, component, stack_trace)
+    VALUES ('delete', old.id, old.message, old.component, old.stack_trace);
+END;
+CREATE TRIGGER IF NOT EXISTS errors_fts_au AFTER UPDATE ON errors BEGIN
+    INSERT INTO errors_fts(errors_fts, rowid, message, component, stack_trace)
+    VALUES ('delete', old.id, old.message, old.component, old.stack_trace);
+    INSERT INTO errors_fts(rowid, message, component, stack_trace)
+    VALUES (new.id, new.message, new.component, new.stack_trace);
+END;
+
+INSERT INTO events_fts(events_fts) VALUES('rebuild');
+INSERT INTO errors_fts(errors_fts) VALUES('rebuild');
+-- FTS5 search index (schema v3) end --
 
 CREATE TABLE IF NOT EXISTS entities (
     id INTEGER PRIMARY KEY,

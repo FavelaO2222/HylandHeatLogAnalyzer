@@ -45,5 +45,17 @@ def create_v1(path):
 
 
 def snapshot(connection):
+    """Every ordinary table's rows, keyed by table name.
+
+    Excludes schema_metadata (version/timestamps, not research content) and
+    any FTS5 virtual table plus its shadow tables (search index only, no
+    stable 'id' column, and not part of the row-preservation contract these
+    snapshots check -- see database/search.py and database/backup.py).
+    """
+    virtual = {row[0] for row in connection.execute(
+        "SELECT name FROM sqlite_master WHERE sql LIKE 'CREATE VIRTUAL TABLE%'")}
+    shadow_suffixes = ('_data', '_idx', '_docsize', '_config', '_content')
+    excluded = {'schema_metadata'} | virtual | {name + suffix for name in virtual for suffix in shadow_suffixes}
     return {row[0]: [tuple(item) for item in connection.execute(f'SELECT * FROM {row[0]} ORDER BY id')]
-            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name!='schema_metadata'")}
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            if row[0] not in excluded}

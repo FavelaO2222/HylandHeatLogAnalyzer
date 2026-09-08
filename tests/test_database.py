@@ -18,6 +18,9 @@ from database.init_db import main
 class DatabaseTests(unittest.TestCase):
     TABLES = {'schema_metadata', 'source_artifacts', 'test_runs', 'events', 'errors',
               'entities', 'findings', 'unknowns', 'decisions', 'relationships', 'evidence_links'}
+    # FTS5 virtual tables plus their shadow tables (search index only; see database/search.py).
+    FTS_TABLES = {f'{base}{suffix}' for base in ('events_fts', 'errors_fts')
+                  for suffix in ('', '_data', '_idx', '_docsize', '_config')}
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -41,7 +44,7 @@ class DatabaseTests(unittest.TestCase):
         connection = self.open_database()
         self.assertTrue(db.database_exists(self.path))
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertEqual(tables, self.TABLES)
+        self.assertEqual(tables, self.TABLES | self.FTS_TABLES)
         version = connection.execute('SELECT * FROM schema_metadata').fetchone()
         self.assertEqual(version['schema_version'], db.SCHEMA_VERSION)
         self.assertTrue(version['created_at'].endswith('Z'))

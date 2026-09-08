@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from database import backup, context_builder, db, evidence, inspect_db, run_comparison
+from database import backup, context_builder, db, evidence, inspect_db, run_comparison, search
 from phase4_fixtures import create_v1, snapshot
 
 
@@ -26,7 +26,7 @@ class MigrationTests(unittest.TestCase):
             after = snapshot(connection)
             self.assertEqual(after.pop('evidence_links'), [])
             self.assertEqual(before, after)
-            self.assertEqual(db.validate_schema_version(connection), 2)
+            self.assertEqual(db.validate_schema_version(connection), 3)
             self.assertEqual(created, connection.execute('SELECT created_at FROM schema_metadata').fetchone()[0])
             metadata = tuple(connection.execute('SELECT * FROM schema_metadata').fetchone())
         evidence.attach_evidence(self.path, 'finding', 1, 'relationship', 1)
@@ -34,6 +34,20 @@ class MigrationTests(unittest.TestCase):
         with closing(db.connect_database(self.path)) as connection:
             self.assertEqual(tuple(connection.execute('SELECT * FROM schema_metadata').fetchone()), metadata)
         self.assertEqual(evidence.list_evidence(self.path, 'finding', 1)['total'], 1)
+
+    def test_v1_to_v3_backfills_legacy_rows_into_the_search_index(self):
+        # The seed fixture's legacy event/error rows predate the FTS5 index by
+        # construction (create_v1 writes straight through the v1 schema); a
+        # correct migration must backfill them, not just start indexing from here.
+        db.initialize_database(self.path)
+        events = search.search(self.path, 'Shared', type='events')['items']
+        self.assertEqual({item['id'] for item in events}, {1, 2})
+        errors = search.search(self.path, 'same error', type='errors')['items']
+        self.assertEqual({item['id'] for item in errors}, {1, 2})
+        # Reapplying an already-v3 database rebuilds (not duplicates) the index.
+        db.initialize_database(self.path)
+        self.assertEqual({item['id'] for item in search.search(self.path, 'Shared', type='events')['items']},
+                         {1, 2})
 
     def test_fresh_and_migrated_schemas_match(self):
         fresh = self.root / 'fresh.db'
@@ -74,6 +88,14 @@ class MigrationTests(unittest.TestCase):
         before = self.path.read_bytes()
         for action in (lambda: evidence.attach_evidence(self.path, 'finding', 1, 'event', 1),
                        lambda: evidence.list_evidence(self.path, 'finding', 1)):
+            with self.assertRaisesRegex(ValueError, 'database.init_db'):
+                action()
+        self.assertEqual(before, self.path.read_bytes())
+
+    def test_v1_search_requires_explicit_migration(self):
+        before = self.path.read_bytes()
+        for action in (lambda: search.search(self.path, 'Shared'),
+                       lambda: search.rebuild_search_index(self.path)):
             with self.assertRaisesRegex(ValueError, 'database.init_db'):
                 action()
         self.assertEqual(before, self.path.read_bytes())

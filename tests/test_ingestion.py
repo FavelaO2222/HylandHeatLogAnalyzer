@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from analysis_capture import AnalysisCapture
 from hyland_heat_log_analyzer import analyze, main, parse_line, render_brief, write_reports
-from database.db import PROJECT_ROOT, connect_database, initialize_database
+from database.db import PROJECT_ROOT, SCHEMA_VERSION, connect_database, initialize_database
 from database.ingestion import import_analysis_result
 from database.inspect_db import inspect_database
 
@@ -242,7 +242,7 @@ class IngestionTests(unittest.TestCase):
         self.import_log()
         before = self.database.read_bytes()
         summary = inspect_database(self.database, True)
-        self.assertIn('Database schema: 2', summary)
+        self.assertIn(f'Database schema: {SCHEMA_VERSION}', summary)
         self.assertIn('Errors: 1', summary)
         for name in ('Entities', 'Findings', 'Unknowns', 'Decisions', 'Relationships'):
             self.assertIn(f'{name}: 0', summary)
