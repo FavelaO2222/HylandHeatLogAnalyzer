@@ -14,26 +14,10 @@ import sqlite3
 import sys
 
 from .db import connect_database, validate_schema_version
+from .research_records import require_row, resolve_subject_entity
 
 CONFIDENCE_LEVELS = ('confirmed', 'strong', 'tentative', 'unknown')
 STATUSES = ('active', 'superseded', 'disproven')
-
-
-def _resolve_subject_entity(connection, name):
-    rows = connection.execute(
-        'SELECT id, entity_type FROM entities WHERE lower(canonical_name) = lower(?) OR lower(name) = lower(?)',
-        (name, name)).fetchall()
-    if not rows:
-        raise ValueError(f"No entity named '{name}'; use subject_entity_id or subject_text instead.")
-    if len(rows) > 1:
-        options = ', '.join(f"{row['id']} ({row['entity_type']})" for row in rows)
-        raise ValueError(f"'{name}' matches more than one entity ({options}); use subject_entity_id to disambiguate.")
-    return rows[0]['id']
-
-
-def _require_row(connection, table, row_id, label):
-    if row_id is not None and connection.execute(f'SELECT 1 FROM {table} WHERE id = ?', (row_id,)).fetchone() is None:
-        raise ValueError(f'No {label} with id {row_id}.')
 
 
 def add_finding(database, finding, *, confidence='unknown', subject_entity_id=None, subject_name=None,
@@ -51,10 +35,10 @@ def add_finding(database, finding, *, confidence='unknown', subject_entity_id=No
         with connection:
             connection.execute('BEGIN IMMEDIATE')
             if subject_name is not None:
-                subject_entity_id = _resolve_subject_entity(connection, subject_name)
-            _require_row(connection, 'entities', subject_entity_id, 'entity')
-            _require_row(connection, 'source_artifacts', source_artifact_id, 'source artifact')
-            _require_row(connection, 'test_runs', test_run_id, 'test run')
+                subject_entity_id = resolve_subject_entity(connection, subject_name)
+            require_row(connection, 'entities', subject_entity_id, 'entity')
+            require_row(connection, 'source_artifacts', source_artifact_id, 'source artifact')
+            require_row(connection, 'test_runs', test_run_id, 'test run')
             return connection.execute(
                 '''INSERT INTO findings
                    (subject_entity_id, subject_text, finding, confidence, source_artifact_id, test_run_id, source_line)

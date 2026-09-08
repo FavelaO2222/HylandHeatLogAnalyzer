@@ -15,8 +15,9 @@ from unittest.mock import patch
 
 from database import db, mcp_server
 from database.mcp_server import (
-    add_finding, backup_database, build_context, configure, inspect_database, list_entities,
-    list_findings, mcp, sync_entities, update_finding_status,
+    add_decision, add_finding, add_unknown, backup_database, build_context, configure,
+    inspect_database, list_decisions, list_entities, list_findings, list_unknowns, mcp,
+    sync_entities, update_decision_status, update_finding_status, update_unknown_status,
 )
 
 
@@ -72,6 +73,39 @@ class McpServerToolTests(unittest.TestCase):
 
     def test_update_finding_status_error(self):
         self.assertEqual(update_finding_status(999, 'superseded'), 'Error: No finding with id 999.')
+
+    def test_add_and_list_unknowns(self):
+        self.assertEqual(add_unknown('A minimal question'), 'Recorded unknown 1.')
+        self.assertIn('A minimal question', list_unknowns())
+        self.assertEqual(list_unknowns(status='resolved'), 'No unknowns recorded.')
+
+    def test_add_unknown_validation_error_surfaces_real_message(self):
+        self.assertEqual(add_unknown('text', importance='urgent'),
+                          "Error: importance must be one of ('low', 'medium', 'high', 'critical').")
+
+    def test_update_unknown_status(self):
+        add_unknown('text')
+        self.assertEqual(update_unknown_status(1, 'resolved'), 'Unknown 1 set to resolved.')
+        self.assertIn('resolved', list_unknowns())
+
+    def test_update_unknown_status_error(self):
+        self.assertEqual(update_unknown_status(999, 'resolved'), 'Error: No unknown with id 999.')
+
+    def test_add_and_list_decisions(self):
+        self.assertEqual(add_decision('scope', 'Defer', 'Insufficient evidence'), 'Recorded decision 1.')
+        self.assertIn('scope -> Defer', list_decisions())
+        self.assertEqual(list_decisions(status='reversed'), 'No decisions recorded.')
+
+    def test_add_decision_validation_error_surfaces_real_message(self):
+        self.assertEqual(add_decision('', 'Defer', 'reason'), 'Error: topic text must not be empty.')
+
+    def test_update_decision_status(self):
+        add_decision('scope', 'Defer', 'reason')
+        self.assertEqual(update_decision_status(1, 'reversed'), 'Decision 1 set to reversed.')
+        self.assertIn('reversed', list_decisions())
+
+    def test_update_decision_status_error(self):
+        self.assertEqual(update_decision_status(999, 'reversed'), 'Error: No decision with id 999.')
 
     def test_sync_and_list_entities(self):
         self.seed_run_with_identity_event()
@@ -142,6 +176,8 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
             tools = await client.list_tools()
             names = {t.name for t in tools.tools}
             for expected in ('add_finding', 'list_findings', 'update_finding_status',
+                             'add_unknown', 'list_unknowns', 'update_unknown_status',
+                             'add_decision', 'list_decisions', 'update_decision_status',
                              'sync_entities', 'list_entities', 'build_context', 'inspect_database',
                              'backup_database'):
                 self.assertIn(expected, names)

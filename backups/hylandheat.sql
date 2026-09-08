@@ -10,6 +10,7 @@ CREATE TABLE decisions (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
+INSERT INTO "decisions" VALUES(1,2,1,'SWAT teardown','Keep F10 creation locked','Lifecycle research incomplete; disposable SWAT clone identity not yet proven safe to tear down','active','2026-09-08T04:25:41.814Z','2026-09-08T04:25:41.814Z');
 CREATE TABLE entities (
     id INTEGER PRIMARY KEY,
     entity_type TEXT NOT NULL CHECK (length(trim(entity_type)) > 0),
@@ -488,6 +489,7 @@ CREATE TABLE unknowns (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     resolved_at TEXT
 );
+INSERT INTO "unknowns" VALUES(1,NULL,'Does goon-clone reuse hold under paired same-instance evidence, or does population completeness only look like reuse?','high','open','Paired same-instance observation across a natural goon transition','SWAT lifecycle','2026-09-08T04:25:41.601Z','2026-09-08T04:25:41.601Z',NULL);
 CREATE INDEX idx_source_artifacts_sha256 ON source_artifacts (sha256);
 CREATE INDEX idx_source_artifacts_type_path ON source_artifacts (artifact_type, path);
 CREATE INDEX idx_test_runs_artifact ON test_runs (source_artifact_id);

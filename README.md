@@ -548,11 +548,16 @@ This still creates no findings, unknowns, decisions, or relationships, and
 recognizes nothing beyond that fixed key list — a differently named or
 differently tagged identifier is left uncatalogued rather than guessed at.
 
-### Recording findings
+### Recording findings, unknowns, and decisions
 
-`database/record_finding.py` is a manual CLI for the one record type the
-project deliberately keeps as a human judgment call rather than something
-inferred from evidence: findings. It has three subcommands.
+`database/record_finding.py`, `record_unknown.py`, and `record_decision.py`
+are manual CLIs for the three record types the project deliberately keeps as
+human judgment calls rather than something inferred from evidence. All three
+share the same entity-resolution and foreign-key validation logic, factored
+into `database/research_records.py` so a behavior change only has to happen
+once. Each has three subcommands: `add`, `list`, and `update-status`.
+
+#### Findings
 
 ```bash
 python -m database.record_finding --database data/hylandheat.db add \
@@ -580,6 +585,51 @@ CHECK constraint, but with a clear message instead of a raw SQLite error).
 edited in place. Every value is exactly what the caller supplies — nothing
 here derives a finding from stored evidence, and `context_builder.py` already
 surfaces whatever this CLI records.
+
+#### Unknowns
+
+```bash
+python -m database.record_unknown --database data/hylandheat.db add \
+    --question "Does goon-clone reuse hold under paired same-instance evidence, or does population completeness only look like reuse?" \
+    --importance high --required-evidence "Paired same-instance observation across a natural goon transition" \
+    --related-feature "SWAT lifecycle"
+python -m database.record_unknown --database data/hylandheat.db list
+python -m database.record_unknown --database data/hylandheat.db list --status open --importance high
+python -m database.record_unknown --database data/hylandheat.db update-status 1 resolved
+```
+
+`add` requires only `--question`; `--importance` defaults to `medium` and
+status always starts `open`. Subject resolution works exactly like findings
+above, except unknowns have no freeform `subject_text` column in the schema
+— only `--subject-entity-id`/`--subject-name`. `--required-evidence` and
+`--related-feature` are optional freeform notes. `list` can filter by
+`--status` and/or `--importance` together. `update-status` moves an unknown
+through `open` / `investigating` / `resolved` / `blocked`; `resolved_at` is
+set automatically when the new status is `resolved` and cleared otherwise
+(including when reopening a previously resolved question), so it always
+reflects the current status rather than a history of when it was first
+resolved.
+
+#### Decisions
+
+```bash
+python -m database.record_decision --database data/hylandheat.db add \
+    --topic "SWAT teardown" --decision "Keep F10 creation locked" \
+    --reason "Lifecycle research incomplete; disposable SWAT clone identity not yet proven safe to tear down" \
+    --subject-name OfficerLee2 --finding-id 1
+python -m database.record_decision --database data/hylandheat.db list
+python -m database.record_decision --database data/hylandheat.db list --status active
+python -m database.record_decision --database data/hylandheat.db update-status 1 reversed
+```
+
+`add` requires `--topic`, `--decision`, and `--reason`; status always starts
+`active`. Subject resolution again matches findings, minus `subject_text`.
+`--finding-id` is an optional, explicit link recording that this decision
+was informed by a specific finding — validated to already exist — not a
+claim that the finding proves the decision correct; nothing here derives a
+decision from a finding automatically. `update-status` moves a decision
+through `active` / `superseded` / `reversed`; the decision text itself is
+never edited in place.
 
 ### MCP server
 
@@ -616,25 +666,25 @@ client cannot redirect writes to an arbitrary path; the target database is
 initialized automatically if it does not yet exist, the same as ingestion's
 own self-init behavior. Every tool is a thin wrapper around an already
 validated module function — `add_finding`, `list_findings`,
-`update_finding_status` (`record_finding.py`), `sync_entities`,
-`list_entities` (`entity_extraction.py`), `build_context`
-(`context_builder.py`), `inspect_database` (`inspect_db.py`), and
-`backup_database` (`backup.py`; see [Backup and restore](#backup-and-restore))
-— so no new validation, entity-resolution, or provenance-checking logic
-exists here, and nothing here writes a finding/unknown/decision
-automatically from evidence.
+`update_finding_status` (`record_finding.py`); `add_unknown`,
+`list_unknowns`, `update_unknown_status` (`record_unknown.py`);
+`add_decision`, `list_decisions`, `update_decision_status`
+(`record_decision.py`); `sync_entities`, `list_entities`
+(`entity_extraction.py`); `build_context` (`context_builder.py`);
+`inspect_database` (`inspect_db.py`); and `backup_database` (`backup.py`;
+see [Backup and restore](#backup-and-restore)) — so no new validation,
+entity-resolution, or provenance-checking logic exists here, and nothing
+here writes a finding/unknown/decision automatically from evidence.
 A validation error (e.g. an unresolvable `subject_name`, an unknown
 `finding_id`) is caught and returned as the tool's own concise error text
 (the same wording the CLI prints), rather than the SDK's generic "Error
 executing tool X", so a connected assistant can see exactly what to correct.
 
-`unknowns`/`decisions` have no MCP tools yet, matching
-[Recording findings](#recording-findings) above: they still only get
-populated by hand-written SQL against the schema in
-[Schema and Design Choices](#schema-and-design-choices). Phase 3 still has
-no research-note import, automatic findings/unknowns/decisions population,
-assembly/source scanning, patrol ingestion, FTS, embeddings, vector search,
-or RAG.
+`findings`, `unknowns`, and `decisions` all now have both a CLI and MCP
+tools; only `entities`/`relationships` are limited to `entity_extraction.py`'s
+heuristic catalog and hand-written SQL, respectively (`relationships` has no
+tooling at all yet). Phase 3 still has no research-note import, assembly/
+source scanning, patrol ingestion, FTS, embeddings, vector search, or RAG.
 
 ## Backup and restore
 

@@ -17,7 +17,7 @@ import sqlite3
 
 from mcp.server.mcpserver import MCPServer
 
-from . import backup, context_builder, entity_extraction, inspect_db, record_finding
+from . import backup, context_builder, entity_extraction, inspect_db, record_decision, record_finding, record_unknown
 from .db import database_exists, initialize_database, resolve_database_path
 
 mcp = MCPServer('hyland-heat-research-db')
@@ -83,6 +83,79 @@ def update_finding_status(finding_id: int, status: str) -> str:
     def action():
         record_finding.update_finding_status(_db(), finding_id, status)
         return f'Finding {finding_id} set to {status}.'
+    return _safely(action)
+
+
+@mcp.tool()
+def add_unknown(question: str, importance: str = 'medium', subject_entity_id: int | None = None,
+                subject_name: str | None = None, required_evidence: str | None = None,
+                related_feature: str | None = None) -> str:
+    """Record a new open research question (a deliberate human judgment call, never inferred from
+    evidence). importance defaults to 'medium' and status always starts 'open'. subject_name
+    resolves to an existing cataloged entity by exact case-insensitive name/canonical_name match
+    and fails clearly if it matches zero or more than one entity, rather than guessing; use
+    subject_entity_id to link by ID instead.
+    """
+    def action():
+        unknown_id = record_unknown.add_unknown(
+            _db(), question, importance=importance, subject_entity_id=subject_entity_id,
+            subject_name=subject_name, required_evidence=required_evidence, related_feature=related_feature)
+        return f'Recorded unknown {unknown_id}.'
+    return _safely(action)
+
+
+@mcp.tool()
+def list_unknowns(status: str | None = None, importance: str | None = None) -> str:
+    """List recorded open questions, optionally filtered by status (open/investigating/resolved/
+    blocked) and/or importance (low/medium/high/critical)."""
+    return _safely(lambda: '\n'.join(
+        record_unknown.format_unknown_row(row) for row in record_unknown.list_unknowns(_db(), status, importance)
+    ) or 'No unknowns recorded.')
+
+
+@mcp.tool()
+def update_unknown_status(unknown_id: int, status: str) -> str:
+    """Move an unknown through open/investigating/resolved/blocked. resolved_at is set
+    automatically when status becomes 'resolved' and cleared otherwise (including on reopening).
+    Question text is never edited in place."""
+    def action():
+        record_unknown.update_unknown_status(_db(), unknown_id, status)
+        return f'Unknown {unknown_id} set to {status}.'
+    return _safely(action)
+
+
+@mcp.tool()
+def add_decision(topic: str, decision: str, reason: str, subject_entity_id: int | None = None,
+                 subject_name: str | None = None, finding_id: int | None = None) -> str:
+    """Record a new research decision (a deliberate human judgment call, never inferred from
+    evidence or from a finding). finding_id is an optional, explicit link recording that this
+    decision was informed by a specific finding, not a claim that the finding proves it.
+    subject_name resolves to an existing cataloged entity by exact case-insensitive name/
+    canonical_name match and fails clearly if it matches zero or more than one entity, rather than
+    guessing; use subject_entity_id to link by ID instead.
+    """
+    def action():
+        decision_id = record_decision.add_decision(
+            _db(), topic, decision, reason, subject_entity_id=subject_entity_id,
+            subject_name=subject_name, finding_id=finding_id)
+        return f'Recorded decision {decision_id}.'
+    return _safely(action)
+
+
+@mcp.tool()
+def list_decisions(status: str | None = None) -> str:
+    """List recorded decisions, optionally filtered by status (active/superseded/reversed)."""
+    return _safely(lambda: '\n'.join(
+        record_decision.format_decision_row(row) for row in record_decision.list_decisions(_db(), status)
+    ) or 'No decisions recorded.')
+
+
+@mcp.tool()
+def update_decision_status(decision_id: int, status: str) -> str:
+    """Move a decision through active/superseded/reversed. Decision text is never edited in place."""
+    def action():
+        record_decision.update_decision_status(_db(), decision_id, status)
+        return f'Decision {decision_id} set to {status}.'
     return _safely(action)
 
 
