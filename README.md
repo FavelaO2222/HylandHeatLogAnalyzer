@@ -10,13 +10,16 @@ this project does.
 Companion project: [HylandHeat](https://github.com/FavelaO2222/HylandHeat) is
 the MelonLoader mod this analyzer's logs and research database are about —
 `tools/analyze-after-game.sh` there is the Steam-launch-options wrapper that
-feeds this analyzer, and `--mod-repo` here (see
+feeds this analyzer; `--mod-repo` (see
 [Phase 4B](#phase-4b-full-text-search-fts5)) records that repo's commit
-against an imported test run.
+against an imported test run, and `database.ingest_source` (see
+[Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion)) makes its
+own source, and the game's decompiled assemblies, full-text searchable too.
 
-Current milestone: **Phase 4B — Full-Text Search (FTS5) and mod source-revision
-capture**, using database schema v3. See [Phase 4B](#phase-4b-full-text-search-fts5)
-for migration, commands, and remaining candidates.
+Current milestone: **Phase 4C — source and decompiled-assembly ingestion**,
+using database schema v4. See [Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion)
+for what's ingested and why, and [Phase 4B](#phase-4b-full-text-search-fts5)
+for the full-text search mechanics both phases share.
 Structured and deterministic retrieval first. Semantic retrieval only where
 exact retrieval eventually proves insufficient.
 
@@ -1200,14 +1203,144 @@ but comparison work and memory scale with stored rows and traces. No semantic
 equivalence, automatic importance/confidence, or causal conclusions are inferred.
 
 Full-text search and mod source-revision capture (both above) were Phase
-4B's first two slices. Deeper source intelligence — mapping a stack
-frame's file/line to git blame, or a commit-range diff against a run's
-behavior — remains explicitly out of scope for now. Remaining candidates
-to evaluate separately, still not implemented:
+4B's first two slices. Remaining candidates to evaluate separately, still
+not implemented:
 
 - Manual entity creation and entity aliases with ambiguity handling.
 - Safe, constrained automatic log ingestion with deduplication and explicit scope.
 - Embeddings only after structured and full-text retrieval prove insufficient.
+
+## Phase 4C: Source and Decompiled-Assembly Ingestion
+
+Runtime evidence (events/errors) tells you *what happened*. It cannot tell
+you *what the game's own code looks like* — the actual field/method
+signatures behind a patched class. Phase 4C adds a second, independent kind
+of ingested content for exactly that: the mod's own C# source, and, where
+useful, decompiled output from the game's own IL2CPP assemblies, both
+full-text searchable alongside events/errors via the same FTS5 mechanism
+Phase 4B already built.
+
+### Why file-level, not member-level
+
+This does **not** parse C#/decompiled text into classes and methods. Two
+reasons. First, the game is IL2CPP: `MelonLoader/Il2CppAssemblies/` (built
+by MelonLoader's Il2CppInterop "unhollowing" step) contains real, loadable
+.NET DLLs — `Assembly-CSharp.dll` holds every `Il2CppScheduleOne.*` game
+type — but decompiling one (`ilspycmd`, see below) shows *method bodies*
+are Il2CppInterop marshalling boilerplate (`il2cpp_runtime_invoke`,
+pointer-offset field access), not the game's real logic; that's expected
+for IL2CPP, not a decompiler shortcoming. What *is* 100% accurate ground
+truth is the **member signatures** — real names, real parameter types, e.g.
+`BeginFootPursuit_Networked(string playerCode, bool includeColleagues =
+true)` on `Il2CppScheduleOne.Police.PoliceOfficer`. Second, even setting
+IL2CPP noise aside, a parser is simply more than this needs: FTS5's
+`snippet()`/`bm25()` already surface the right neighborhood of a large
+file without one, exactly like an event/error message already works. So a
+whole file — mod source or one decompiled type — is indexed as a single
+document, the same granularity events/errors already use per row.
+
+### Schema v4: `source_documents`
+
+`database/schema.sql` adds `source_documents` (`source_artifact_id`,
+`relative_path`, `language`, `content`) and `source_documents_fts`
+alongside `events_fts`/`errors_fts` in the same marked block, with the same
+trigger-sync/rebuild-on-migrate mechanism Phase 4B established. Unlike log
+ingestion, **ingesting the same directory again never deduplicates** —
+each call to `ingest_source` is a deliberate new snapshot (a new
+`source_artifacts` row, a fresh set of `source_documents` rows), so "what
+did this file look like as of commit X" stays answerable across repeated
+ingestions rather than being silently reused.
+
+Upgrade explicitly, same as v2/v3:
+
+```bash
+python3 -m database.backup dump --database data/hylandheat.db --backup backups/before-v4.sql
+python3 -m database.init_db --database data/hylandheat.db
+```
+
+### Ingesting: `database.ingest_source`
+
+```bash
+# The mod's own source (small, plain C#, no external tooling needed):
+python3 -m database.ingest_source --database data/hylandheat.db \
+    --root /home/oska/RiderProjects/HylandHeat --artifact-type source_code \
+    --mod-repo /home/oska/RiderProjects/HylandHeat
+
+# Decompiled game assembly members (see "Decompiling game assemblies" below
+# for how <decompiled-dir> gets produced -- ingest_source only ever reads it):
+python3 -m database.ingest_source --database data/hylandheat.db \
+    --root <decompiled-dir> --artifact-type decompiler_export
+```
+
+`--mod-repo`, if given, records that repo's commit (via
+`database.source_revision.capture_revision`, the same helper `--mod-repo`
+on the analyzer CLI uses) in the ingested artifact's notes — direct reuse
+of Phase 4B's mod-source-revision work, so a source snapshot is tied to the
+exact commit it came from. `--extensions` (default `.cs`) is
+comma-separated and case-insensitive. A file that fails to decode as UTF-8
+is skipped and counted rather than failing the whole ingestion. The
+reusable function is `ingest_directory(database, artifact_type, root, *,
+extensions=('.cs',), mod_repo=None)`.
+
+### Searching: `--type documents`
+
+```bash
+python3 -m database.search "BeginFootPursuit" --database data/hylandheat.db --type documents
+```
+
+`database.search`'s `SOURCES` gained `'documents'` alongside `'events'`/
+`'errors'`; a document result item carries `relative_path` instead of
+`test_run_id`/`source_line`. `search()`/`rebuild_search_index()` now
+require **schema v4** uniformly (the same "the search feature's minimum
+version tracks its own schema generation" rule Phase 4B's v2→v3 bump
+already established, now v3→v4) — a v3 database gets the same actionable
+"run `python -m database.init_db`" error every other version-gated command
+here already gives.
+
+### Decompiling game assemblies (optional, external, one-time-ish)
+
+`ingest_source --artifact-type decompiler_export` only ever reads an
+*already-decompiled* directory — it does not shell out to a decompiler
+itself, so this project stays dependency-free for anyone who only wants
+mod-source ingestion. Producing that directory (verified working against
+this machine's *Schedule I* install):
+
+```bash
+dotnet tool install -g ilspycmd
+export PATH="$PATH:~/.dotnet/tools"
+GAME=".../Schedule I/MelonLoader/Il2CppAssemblies"
+ilspycmd -p -o <decompiled-dir-outside-any-git-repo> -r "$GAME" "$GAME/Assembly-CSharp.dll"
+```
+
+`Assembly-CSharp.dll` (13 MB) is the one that matters here — every
+`Il2CppScheduleOne.*` game type; the other 133 DLLs under
+`Il2CppAssemblies/` are Unity/third-party plugin noise not worth ingesting
+by default. **`<decompiled-dir>` must live outside both this repo and the
+mod source repo** — never let `ingest_source --root` point inside a git
+working tree.
+
+### Backup and copyright: `source_documents` is never in the SQL dump
+
+`database.backup` excludes `source_documents` from SQL dumps
+**unconditionally** — both `source_code` and `decompiler_export` rows,
+regardless of size. This is a *different* rationale from the existing
+FTS5-shadow-table exclusion (that one's a technical iterdump limitation);
+this one is deliberate policy: decompiled game-assembly text is
+copyrighted and must never land in `backups/hylandheat.sql`, which this
+project commits to a **public** GitHub repo, and even the mod's own source
+(already safe in its own repo) doesn't need a second copy here. A restore
+recreates the `source_documents`/`source_documents_fts` structures empty —
+`'rebuild'` on an empty content table correctly yields an empty index, the
+same mechanism proven by Phase 4B's fresh-database case — and getting the
+actual content back means re-running `ingest_source` against the original
+files, not something a rebuild can do on its own.
+
+### Open threads
+
+Deeper source intelligence — mapping an error's stack-frame file/line
+straight to the matching decompiled member, or a commit-range diff against
+a run's behavior — remains out of scope for this slice; ingested documents
+are searchable, not yet cross-referenced against `errors.stack_trace`.
 
 **Structured and deterministic retrieval first. Semantic retrieval only where
 exact retrieval eventually proves insufficient.**
