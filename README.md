@@ -487,6 +487,34 @@ tests use temporary controlled fixtures and cover SHA-256, deduplication,
 rollback, complete/repeated stacks, optional CLI behavior, report-byte equivalence,
 incompatible schemas, source changes, and read-only inspection.
 
-Phase 3 is not implemented: no research-note import, entity discovery, automatic
-findings/unknowns/decisions, assembly/source scanning, patrol ingestion, FTS,
-embeddings, vector search, RAG, context builder, MCP, or LLM/model integration.
+## Research Database: Phase 3 (context builder)
+
+`database/context_builder.py` is the first Phase 3 slice: a read-only CLI that
+renders a compact, character-budgeted Markdown packet from whatever the database
+already holds, for handing to an LLM instead of raw logs or full JSON.
+
+```bash
+python -m database.context_builder --database data/hylandheat.db
+python -m database.context_builder --database data/hylandheat.db --run 3
+python -m database.context_builder --database data/hylandheat.db --max-chars 4000 --max-events 8
+```
+
+Without `--run`, it selects the highest test-run ID. The packet has five
+sections: Errors and Notable Events are scoped to that one run (errors ranked
+FATAL/EXCEPTION/ERROR then source line; events ranked by the same
+`PRIMARY_CATEGORIES` priority order ingestion already uses, then source line,
+capped at `--max-events` with the true total shown alongside it). Open
+Unknowns, Findings, and Decisions are project-wide research state, not scoped
+to one run: only `status='open'`/`'active'` rows are shown (ranked by
+importance/confidence, newest first), each with its subject entity's name when
+one is linked. Every section is capped at `--max-research-rows` and shows
+`(none recorded yet)` while those tables are empty. If the assembled packet
+would exceed `--max-chars`, later rows in whichever section hits the limit are
+dropped and a truncation footer is appended; nothing is ever cut mid-line.
+
+This only queries; it never writes, infers a finding, or discovers an entity.
+Phase 3 still has no research-note import, entity discovery, automatic
+findings/unknowns/decisions population, assembly/source scanning, patrol
+ingestion, FTS, embeddings, vector search, RAG, MCP, or LLM/model integration.
+Right now `entities`/`findings`/`unknowns`/`decisions` only get populated by
+hand-written SQL against the schema in [Schema and Design Choices](#schema-and-design-choices).
