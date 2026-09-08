@@ -26,6 +26,8 @@ class MigrationTests(unittest.TestCase):
             after = snapshot(connection)
             self.assertEqual(after.pop('evidence_links'), [])
             self.assertEqual(after.pop('source_documents'), [])
+            self.assertEqual(after.pop('experiments'), [])
+            self.assertEqual(after.pop('experiment_symbols'), [])
             self.assertEqual(before, after)
             self.assertEqual(db.validate_schema_version(connection), db.SCHEMA_VERSION)
             self.assertEqual(created, connection.execute('SELECT created_at FROM schema_metadata').fetchone()[0])

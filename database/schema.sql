@@ -1,4 +1,4 @@
--- Authoritative fresh-database schema v4. db.initialize_database migrates v1/v2/v3 explicitly.
+-- Authoritative fresh-database schema v5. db.initialize_database migrates v1-v4 explicitly.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 4);
+INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 5);
 
 -- Raw evidence references. created_at is the optional original artifact time.
 CREATE TABLE IF NOT EXISTS source_artifacts (
@@ -98,10 +98,14 @@ CREATE INDEX IF NOT EXISTS idx_errors_severity ON errors (severity);
 -- its actual content means re-running database.ingest_source, not a rebuild.
 --
 -- Schema v4: one row per ingested source/decompiled-assembly file (see
--- database/ingest_source.py). Unlike events/errors, ingestion never
--- deduplicates against prior runs of the same source_artifact -- re-ingesting
--- after code changes is a deliberate new snapshot, not a reused one, so the
--- history of what a file looked like as of a given ingestion is preserved.
+-- database/ingest_source.py). Schema v5 adds `collection` (a caller-chosen
+-- stable identity, independent of the --root path used for any one
+-- ingestion run -- decompiled/git-archive output routinely comes from a
+-- fresh scratch directory each time) and `content_sha256`, so ingestion can
+-- tell whether a file actually changed: re-ingesting an unchanged file under
+-- the same collection is a no-op (no new row), while a changed or new file
+-- still gets a new row -- the history of what a file looked like as of a
+-- given ingestion is preserved, it just isn't duplicated for nothing.
 CREATE TABLE IF NOT EXISTS source_documents (
     id INTEGER PRIMARY KEY,
     source_artifact_id INTEGER NOT NULL REFERENCES source_artifacts(id) ON DELETE RESTRICT,
@@ -109,8 +113,9 @@ CREATE TABLE IF NOT EXISTS source_documents (
     language TEXT,
     content TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
+, collection TEXT, content_sha256 TEXT);
 CREATE INDEX IF NOT EXISTS idx_source_documents_artifact_path ON source_documents (source_artifact_id, relative_path);
+CREATE INDEX IF NOT EXISTS idx_source_documents_collection_path ON source_documents (collection, relative_path);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
     message, component, category, event_type, content='events', content_rowid='id');
@@ -277,3 +282,31 @@ CREATE INDEX IF NOT EXISTS idx_evidence_links_event ON evidence_links (event_id)
 CREATE INDEX IF NOT EXISTS idx_evidence_links_error ON evidence_links (error_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_links_entity ON evidence_links (entity_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_links_relationship ON evidence_links (relationship_id);
+
+-- Schema v5: a recorded experiment/observation, e.g. "does X change during Y"
+-- plus what was actually observed -- distinct from a finding (a conclusion):
+-- an experiment is the record of having looked, findings are what you
+-- concluded from possibly several of them. source_artifact_id is the log or
+-- brief text the observation came from (an experiment need not have a fully
+-- structured test_run behind it -- a Latest_brief.txt summary is enough).
+CREATE TABLE IF NOT EXISTS experiments (
+    id INTEGER PRIMARY KEY,
+    question TEXT NOT NULL CHECK (length(trim(question)) > 0),
+    observed_result TEXT NOT NULL CHECK (length(trim(observed_result)) > 0),
+    source_artifact_id INTEGER REFERENCES source_artifacts(id) ON DELETE RESTRICT,
+    test_run_id INTEGER REFERENCES test_runs(id) ON DELETE RESTRICT,
+    mod_build TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_experiments_artifact ON experiments (source_artifact_id);
+CREATE INDEX IF NOT EXISTS idx_experiments_run ON experiments (test_run_id);
+
+-- A junction table (not a JSON column) because database.research joins
+-- against this directly to answer "which experiments touched symbol X".
+CREATE TABLE IF NOT EXISTS experiment_symbols (
+    id INTEGER PRIMARY KEY,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE RESTRICT,
+    symbol TEXT NOT NULL CHECK (length(trim(symbol)) > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_experiment_symbols_symbol ON experiment_symbols (symbol);
+CREATE INDEX IF NOT EXISTS idx_experiment_symbols_experiment ON experiment_symbols (experiment_id);

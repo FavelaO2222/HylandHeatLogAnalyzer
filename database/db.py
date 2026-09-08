@@ -8,8 +8,8 @@ from typing import Optional, Union
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = Path(__file__).resolve().with_name('schema.sql')
-SCHEMA_VERSION = 4
-SUPPORTED_VERSIONS = (1, 2, 3, 4)
+SCHEMA_VERSION = 5
+SUPPORTED_VERSIONS = (1, 2, 3, 4, 5)
 DatabasePath = Optional[Union[str, Path]]
 
 
@@ -62,6 +62,30 @@ def _check_version(connection: sqlite3.Connection) -> None:
         raise ValueError('Unsupported or invalid schema version; a migration is required.')
 
 
+def _pending_column_additions(connection: sqlite3.Connection, table: str, columns: dict) -> str:
+    """SQL text adding whichever of `columns` ({name: type}) `table` doesn't have yet, or ''.
+
+    SQLite has no idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so a
+    migration that adds a column to a table an *earlier* schema version
+    already created and populated (unlike every prior migration here, which
+    only ever added whole new tables) needs this explicit check. Returned as
+    text to be prepended to the rest of the migration script and executed in
+    the very same transaction (rather than run separately beforehand), so a
+    later failure in that script rolls the column addition back too -- DDL
+    and version insertion still roll back together. A completely fresh
+    database has no such table yet at the point this runs (schema.sql is
+    about to create it, columns included); returning '' is correct there,
+    not a bug to guard against. Only ever called with fixed, internal
+    table/column names, never CLI input.
+    """
+    if not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+        return ''
+    existing = {row[1] for row in connection.execute(f'PRAGMA table_info({table})')}
+    return ''.join(f'ALTER TABLE {table} ADD COLUMN {column} {coltype};\n'
+                   for column, coltype in columns.items() if column not in existing)
+
+
 def initialize_database(database: DatabasePath = None) -> Path:
     """Create/reapply the current schema, or explicitly migrate an older database
     to it without changing existing rows.
@@ -71,8 +95,10 @@ def initialize_database(database: DatabasePath = None) -> Path:
     brings it straight to SCHEMA_VERSION in one pass regardless of its starting
     version -- v1 -> v2 added evidence_links; v1/v2 -> v3 added the events_fts/
     errors_fts search index; v1/v2/v3 -> v4 added source_documents and its own
-    FTS5 index (see schema.sql), rebuilt from current content as part of that
-    same script. Read-only operations and existing writers never migrate
+    FTS5 index; v1..v4 -> v5 adds source_documents.collection/content_sha256
+    (via _ensure_column, since CREATE TABLE IF NOT EXISTS is a no-op against
+    the existing v4 table) plus the experiments/experiment_symbols tables (see
+    schema.sql). Read-only operations and existing writers never migrate
     implicitly.
     """
     path = resolve_database_path(database)
@@ -81,9 +107,15 @@ def initialize_database(database: DatabasePath = None) -> Path:
     with closing(connect_database(path, create=True)) as connection:
         _check_version(connection)
         try:
+            # Read-only, safe before the transaction below even begins. Prepended
+            # (not run afterward) so it lands before schema.sql's own statements
+            # that assume these columns already exist (e.g. an index on one), and
+            # so it shares that transaction rather than being separately committed.
+            alterations = _pending_column_additions(
+                connection, 'source_documents', {'collection': 'TEXT', 'content_sha256': 'TEXT'})
             # executescript commits any pending transaction before starting, so
             # BEGIN belongs in the script. DDL and version insertion roll back together.
-            connection.executescript('BEGIN IMMEDIATE;\n' + schema)
+            connection.executescript('BEGIN IMMEDIATE;\n' + alterations + schema)
             # schema_version < SCHEMA_VERSION (rather than == some single prior
             # version) lets one script jump a database straight from v1 or v2 to
             # v3; it is a no-op once the database is already at SCHEMA_VERSION.
