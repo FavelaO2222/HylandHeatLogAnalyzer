@@ -795,8 +795,9 @@ an entity by hand" CLI. Every other CLI here only resolves an existing
 entity by name/ID; none of them create one, so a relationship (or a
 finding/unknown/decision subject) can only reference an entity the catalog
 or a person has already added directly. Phase 3 still has no research-note
-import, assembly/source scanning, patrol ingestion, FTS, embeddings, vector
-search, or RAG.
+import, assembly/source scanning, patrol ingestion, embeddings, vector
+search, or RAG. Phase 4B adds SQLite FTS5 full-text search over events/errors;
+see [below](#phase-4b-full-text-search-fts5).
 
 ## Backup and restore
 
@@ -1040,7 +1041,114 @@ file creation also protecting against concurrent creation. The installed
 pre-commit hook continues to refresh and stage the tracked SQL dump; its existing
 non-blocking warning policy is unchanged.
 
-### Open threads and Phase 4B candidates (not implemented)
+## Phase 4B: Full-Text Search (FTS5)
+
+Structured, deterministic retrieval (the Phase 3 context builder, Phase 4A's
+comparison) already covers exact-field lookups by run/entity/status. It does
+not help find message text you can't already name a filter for — "which
+events mention 'null reference'" has no SQL shortcut without scanning every
+message by hand. SQLite FTS5 closes exactly that gap: ranked search over
+already-ingested event/error text. Still fully local, still no embeddings,
+external services, or semantic ranking — FTS5's own `bm25()` is enough, per
+this exact tradeoff as flagged at the end of Phase 4A (see below).
+
+### Schema v3: the search index
+
+`database/schema.sql` adds two external-content FTS5 virtual tables,
+`events_fts` (`message`, `component`, `category`, `event_type`) and
+`errors_fts` (`message`, `component`, `stack_trace`), each pointing at its own
+table via `content=`/`content_rowid='id'`. **events/errors remain the only
+source of truth**; the FTS5 tables hold nothing but a derived search index,
+always discardable and rebuildable from them. `AFTER INSERT/UPDATE/DELETE`
+triggers on events/errors keep the index live on every ordinary write.
+`database.search.rebuild_search_index()` exposes FTS5's own `'rebuild'`
+special command standalone, for repairing drift from any write that bypasses
+those triggers (a raw `sqlite3` connection, for instance) — CLI `--rebuild`,
+MCP `rebuild_search_index`. Migrating an older database (or a plain reapply)
+runs that same rebuild unconditionally as schema.sql's last step, so the
+index always matches current content afterward regardless of starting state —
+a full nuke-and-rebuild rather than an incremental diff, and cheap at this
+project's scale, so no separate drift-detection logic exists.
+
+Upgrade explicitly, same as v2 (existing rows are always preserved):
+
+```bash
+python3 -m database.backup dump --database data/hylandheat.db --backup backups/before-v3.sql
+python3 -m database.init_db --database data/hylandheat.db
+python3 -m database.inspect_db --database data/hylandheat.db
+```
+
+`init_db` creates fresh v3 databases or applies the additive v1/v2 -> v3
+change (`evidence_links` if still missing, plus the FTS5 index and triggers)
+in one transaction, straight from whatever version the database was already
+at — schema.sql is always the full current schema, not an incremental diff,
+so one script application is enough regardless of starting version. Failed
+migration rolls back; reapplying an already-v3 database is idempotent (the
+index is simply rebuilt, not duplicated). Search commands require v3 and
+report the migration command when needed, the same as evidence commands
+require v2; read-only tools and server startup never migrate implicitly.
+
+### Search CLI and MCP
+
+```bash
+python3 -m database.search "clone" --database data/hylandheat.db --type events --limit 3
+python3 -m database.search "IOException" --database data/hylandheat.db --type errors --format json
+python3 -m database.search --rebuild --database data/hylandheat.db
+```
+
+Results are ranked by FTS5's own `bm25()` (best match first) and bounded by
+`--limit` (default 20, 1-100, same range as evidence listing); each item
+reports its source table (`event`/`error`), row id, `test_run_id`,
+`source_line`, the event category or error severity, component, a
+highlighted snippet, and the raw bm25 score, so a match traces straight back
+to the run and log line it came from. `--type` restricts to `events` or
+`errors` (default: both — no keyword search prefix, just the plain query
+text FTS5 already understands). The reusable functions are
+`search(database, query, *, type=None, limit=20)` and
+`rebuild_search_index(database)` (keyword-only after the positionals, like
+the rest of this codebase's module functions).
+
+Example against the live snapshot (356 events, 3 errors as of this writing):
+
+```text
+$ python3 -m database.search "clone" --database data/hylandheat.db --type events --limit 3
+3 result(s) for "clone" (events only)
+- [event #75] (run #1, line 263) [Hyland Heat] [HylandHeat] OFFICER >>CLONE<< QUEUE PROGRESS: Created=1/20, Latest=officerlee2
+- [event #264] (run #1, line 490) [Hyland Heat] [HylandHeat] OFFICER >>CLONE<< QUEUE PROGRESS: Created=2/20, Latest=officerlee3
+- [event #276] (run #1, line 502) [Hyland Heat] [HylandHeat] OFFICER >>CLONE<< QUEUE PROGRESS: Created=3/20, Latest=officerjackson2
+More matches beyond --limit 3.
+```
+
+The MCP server adds two tools:
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `search` | `query`, optional `type`, `limit` | Ranked, bounded results — same shape as the CLI's `--format json` |
+| `rebuild_search_index` | none | Confirmation with events/errors indexed counts |
+
+Both require schema v3 and follow the existing convention of returning
+concrete, actionable validation errors (`Error: ...` for the CLI,
+`{'error': ...}` in MCP `structuredContent`) rather than a generic failure.
+
+### Backup and restore
+
+`database.backup` excludes `events_fts`/`errors_fts` (and their FTS5 shadow
+tables) from SQL dumps: `sqlite3.Connection.iterdump()` replays a virtual
+table's shadow-table content by patching `sqlite_master` directly under
+`PRAGMA writable_schema=ON` rather than issuing a real `CREATE VIRTUAL
+TABLE`, and that patched entry is not visible to the very same connection
+running the rest of the restore script — restoring it hits `no such table`
+before reaching any of the real data. Rather than depend on that, the dump
+carries only the authoritative events/errors rows (their sync triggers are
+ordinary DDL and dump/restore normally, same as every other trigger and
+index here); `restore_database` recreates the FTS5 index structurally
+afterward — a plain `CREATE VIRTUAL TABLE`, reliable on its own — and
+rebuilds it from the rows just restored, without ever touching
+`schema_version`. That makes it a completion of the restore, not an implicit
+migration: a restored v1/v2 backup is entirely unaffected by any of this and
+stays v1/v2, with no FTS5 tables, exactly as before Phase 4B.
+
+### Open threads and remaining Phase 4B candidates (not implemented)
 
 Provenance is explicitly attached and has no removal/status-edit CLI yet.
 There is no historical entity occurrence table: comparisons depend on the
@@ -1048,16 +1156,13 @@ current catalog and the existing tagged-name extractor. Output is bounded,
 but comparison work and memory scale with stored rows and traces. No semantic
 equivalence, automatic importance/confidence, or causal conclusions are inferred.
 
-Recommended Phase 4B starting slice: explicit Git commit metadata associated
-with test runs, with source paths/revisions and deterministic queries. Keep the
-next milestone bounded; broader source intelligence can follow measured needs.
-Candidates to evaluate separately:
+Full-text search (above) was the first Phase 4B slice. Remaining candidates
+to evaluate separately, still not implemented:
 
 - Git/source-code intelligence and commit ↔ test-run correlation.
-- SQLite FTS5 when exact structured lookup misses relevant stored text.
 - Manual entity creation and entity aliases with ambiguity handling.
 - Safe, constrained automatic log ingestion with deduplication and explicit scope.
 - Embeddings only after structured and full-text retrieval prove insufficient.
 
 **Structured and deterministic retrieval first. Semantic retrieval only where
-exact retrieval eventually proves insufficient. Phase 4B has not begun.**
+exact retrieval eventually proves insufficient.**
