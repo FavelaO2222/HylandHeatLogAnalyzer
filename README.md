@@ -633,3 +633,39 @@ populated by hand-written SQL against the schema in
 no research-note import, automatic findings/unknowns/decisions population,
 assembly/source scanning, patrol ingestion, FTS, embeddings, vector search,
 or RAG.
+
+## Backup and restore
+
+`data/*.db` is gitignored generated data, so on its own it has no git
+history: unlike the source files, a corrupted or deleted `.db` has no commit
+to recover from. `database/backup.py` closes that gap by writing the
+database's full content as a plain-text SQL dump to `backups/hylandheat.sql`
+— a file git *can* meaningfully track and diff — and by rebuilding a fresh
+database from that dump.
+
+```bash
+python -m database.backup dump --database data/hylandheat.db --backup backups/hylandheat.sql
+python -m database.backup restore --database data/restored.db --backup backups/hylandheat.sql
+```
+
+`dump` opens the source read-only (it never mutates it) and refuses to dump
+a source that already fails its own `PRAGMA foreign_key_check`, rather than
+faithfully backing up a corrupted database. `restore` only ever creates a
+brand-new file — it refuses outright if the target path already exists,
+never overwriting one. Python's `sqlite3.Connection.iterdump()` orders
+tables alphabetically rather than by foreign-key dependency (`events`, which
+has NOT NULL foreign keys into `source_artifacts`/`test_runs`, is dumped
+before either of them), so restoring through a foreign-key-enforcing
+connection would reject a perfectly valid dump partway through; `restore`
+runs the dump script with foreign keys off for that reason, then runs its
+own `PRAGMA foreign_key_check` immediately afterward and refuses (deleting
+the partial file) if that check finds anything, before a caller can reach
+the restored file through the normal, enforcing `connect_database`.
+
+Neither command touches git — running `dump` only rewrites
+`backups/hylandheat.sql` on disk. Actually protecting the data still needs a
+`git add backups/hylandheat.sql && git commit` afterward (or asking an
+assistant to do so); a sensible habit is dumping after any session that
+recorded findings or ran a new ingestion. This is not yet wired into
+`mcp_server.py` or run automatically after a write — a connected assistant
+can be asked to run `dump` and commit it, the same as any other CLI here.
