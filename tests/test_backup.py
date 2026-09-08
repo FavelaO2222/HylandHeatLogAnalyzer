@@ -6,9 +6,12 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from database import db
 from database.backup import dump_database, main, restore_database
+from database.evidence import attach_evidence, list_evidence
+from phase4_fixtures import seed, snapshot
 
 
 class BackupRestoreTests(unittest.TestCase):
@@ -158,6 +161,55 @@ class BackupRestoreTests(unittest.TestCase):
                 main(['restore', '--database', str(self.path), '--backup', str(self.backup_path)]), 2)
         self.assertIn('Error:', error.getvalue())
 
+    def test_v2_round_trip_preserves_all_evidence_and_constraints(self):
+        connection = self.open_database()
+        seed(connection)
+        for owner in ('finding', 'unknown', 'decision'):
+            for target in ('run', 'event', 'error', 'entity', 'relationship'):
+                attach_evidence(self.path, owner, 1, target, 1)
+        before = snapshot(connection)
+        dump_database(self.path, self.backup_path)
+        restored_path = restore_database(Path(self.temp.name) / 'restored.db', self.backup_path)
+        with closing(db.connect_database(restored_path)) as restored:
+            self.assertEqual(snapshot(restored), before)
+            self.assertEqual(db.validate_schema_version(restored), 2)
+            with self.assertRaises(sqlite3.IntegrityError), restored:
+                restored.execute('DELETE FROM events WHERE id=1')
+            with self.assertRaises(sqlite3.IntegrityError), restored:
+                restored.execute('INSERT INTO evidence_links(finding_id,event_id) VALUES (1,1)')
+        self.assertEqual(list_evidence(restored_path, 'decision', 1)['total'], 5)
+
+    def test_restore_rejects_dangling_evidence_even_with_foreign_keys_off(self):
+        connection = self.open_database()
+        seed(connection)
+        dump_database(self.path, self.backup_path)
+        sql = self.backup_path.read_text().replace('COMMIT;',
+            'INSERT INTO evidence_links(unknown_id,event_id) VALUES (1,999);\nCOMMIT;')
+        self.backup_path.write_text(sql)
+        target = Path(self.temp.name) / 'broken.db'
+        with self.assertRaisesRegex(ValueError, 'foreign key check'):
+            restore_database(target, self.backup_path)
+        self.assertFalse(target.exists())
+
+    def test_failed_dump_preserves_previous_backup_atomically(self):
+        self.open_database()
+        dump_database(self.path, self.backup_path)
+        before = self.backup_path.read_bytes()
+        with patch('database.backup.os.replace', side_effect=OSError('replace failed')):
+            with self.assertRaises(OSError):
+                dump_database(self.path, self.backup_path)
+        self.assertEqual(self.backup_path.read_bytes(), before)
+        self.assertEqual(list(self.backup_path.parent.glob('*.tmp')), [])
+
+    def test_dump_cannot_overwrite_database_or_hardlink_alias(self):
+        self.open_database()
+        alias = Path(self.temp.name) / 'alias.sql'
+        alias.hardlink_to(self.path)
+        before = self.path.read_bytes()
+        for target in (self.path, alias):
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, 'alias'):
+                dump_database(self.path, target)
+        self.assertEqual(self.path.read_bytes(), before)
 
 if __name__ == '__main__':
     unittest.main()

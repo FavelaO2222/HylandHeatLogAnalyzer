@@ -419,6 +419,25 @@ INSERT INTO "events" VALUES(347,1,1,'10:15:20.148','diagnostic_result','SWAT','d
 INSERT INTO "events" VALUES(348,1,1,'10:15:20.148','diagnostic_result','SWAT','diagnostic_result','[Hyland Heat] [HylandHeat][SWAT] POOL CHECK: ID=officerlee2, Station=Police station, StationGUID=15c1485f-bc2e-4461-aeaf-bb0e638c6730, Count=10, Member=False, Total=10',579,'2026-09-08T02:15:08.519Z');
 INSERT INTO "events" VALUES(349,1,1,'10:15:20.985','swat_recall','SWAT','swat_recall','[Hyland Heat] [HylandHeat][SWAT] RECALL IGNORED: Reason=Manual, no tracked unit, State=Dormant, Live=0.',581,'2026-09-08T02:15:08.519Z');
 INSERT INTO "events" VALUES(350,1,1,'10:17:40.156','swat_recall','SWAT','swat_recall','[Hyland Heat] [HylandHeat][SWAT] RECALL IGNORED: Reason=SceneChange, no tracked unit, State=Dormant, Live=0.',582,'2026-09-08T02:15:08.519Z');
+CREATE TABLE evidence_links (
+    id INTEGER PRIMARY KEY,
+    finding_id INTEGER REFERENCES findings(id) ON DELETE RESTRICT CHECK (finding_id > 0),
+    unknown_id INTEGER REFERENCES unknowns(id) ON DELETE RESTRICT CHECK (unknown_id > 0),
+    decision_id INTEGER REFERENCES decisions(id) ON DELETE RESTRICT CHECK (decision_id > 0),
+    test_run_id INTEGER REFERENCES test_runs(id) ON DELETE RESTRICT CHECK (test_run_id > 0),
+    event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT CHECK (event_id > 0),
+    error_id INTEGER REFERENCES errors(id) ON DELETE RESTRICT CHECK (error_id > 0),
+    entity_id INTEGER REFERENCES entities(id) ON DELETE RESTRICT CHECK (entity_id > 0),
+    relationship_id INTEGER REFERENCES relationships(id) ON DELETE RESTRICT CHECK (relationship_id > 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK ((finding_id IS NOT NULL) + (unknown_id IS NOT NULL) + (decision_id IS NOT NULL) = 1),
+    CHECK ((test_run_id IS NOT NULL) + (event_id IS NOT NULL) + (error_id IS NOT NULL)
+           + (entity_id IS NOT NULL) + (relationship_id IS NOT NULL) = 1)
+);
+INSERT INTO "evidence_links" VALUES(1,1,NULL,NULL,1,NULL,NULL,NULL,NULL,'2026-09-08T05:44:16.485Z');
+INSERT INTO "evidence_links" VALUES(2,1,NULL,NULL,NULL,341,NULL,NULL,NULL,'2026-09-08T05:44:16.699Z');
+INSERT INTO "evidence_links" VALUES(3,1,NULL,NULL,NULL,346,NULL,NULL,NULL,'2026-09-08T05:44:16.992Z');
+INSERT INTO "evidence_links" VALUES(4,1,NULL,NULL,NULL,NULL,NULL,NULL,1,'2026-09-08T05:44:17.207Z');
 CREATE TABLE findings (
     id INTEGER PRIMARY KEY,
     subject_entity_id INTEGER REFERENCES entities(id) ON DELETE RESTRICT,
@@ -451,7 +470,7 @@ CREATE TABLE schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT INTO "schema_metadata" VALUES(1,1,'2026-09-08T01:58:01.369Z','2026-09-08T01:58:01.369Z');
+INSERT INTO "schema_metadata" VALUES(1,2,'2026-09-08T01:58:01.369Z','2026-09-08T05:44:16.245Z');
 CREATE TABLE source_artifacts (
     id INTEGER PRIMARY KEY,
     artifact_type TEXT NOT NULL CHECK (artifact_type IN
@@ -516,4 +535,17 @@ CREATE INDEX idx_relationships_source_type ON relationships (source_entity_id, r
 CREATE INDEX idx_relationships_target ON relationships (target_entity_id);
 CREATE INDEX idx_relationships_artifact ON relationships (source_artifact_id);
 CREATE INDEX idx_relationships_run ON relationships (test_run_id);
+CREATE UNIQUE INDEX idx_evidence_links_pair ON evidence_links (
+    ifnull(finding_id, 0), ifnull(unknown_id, 0), ifnull(decision_id, 0),
+    ifnull(test_run_id, 0), ifnull(event_id, 0), ifnull(error_id, 0),
+    ifnull(entity_id, 0), ifnull(relationship_id, 0)
+);
+CREATE INDEX idx_evidence_links_finding ON evidence_links (finding_id);
+CREATE INDEX idx_evidence_links_unknown ON evidence_links (unknown_id);
+CREATE INDEX idx_evidence_links_decision ON evidence_links (decision_id);
+CREATE INDEX idx_evidence_links_run ON evidence_links (test_run_id);
+CREATE INDEX idx_evidence_links_event ON evidence_links (event_id);
+CREATE INDEX idx_evidence_links_error ON evidence_links (error_id);
+CREATE INDEX idx_evidence_links_entity ON evidence_links (entity_id);
+CREATE INDEX idx_evidence_links_relationship ON evidence_links (relationship_id);
 COMMIT;

@@ -13,12 +13,14 @@ import sqlite3
 import sys
 
 from .db import connect_database, validate_schema_version
+from .evidence import evidence_label, fetch_evidence
 from .ingestion import PRIMARY_CATEGORIES
 from .research_records import resolve_entity_name
 
 DEFAULT_MAX_CHARS = 6000
 DEFAULT_MAX_EVENTS = 12
 DEFAULT_MAX_RESEARCH_ROWS = 12
+MAX_EVIDENCE_PER_RECORD = 6
 SEVERITY_ORDER = {"FATAL": 0, "EXCEPTION": 1, "ERROR": 2}
 CONFIDENCE_ORDER = {"confirmed": 0, "strong": 1, "tentative": 2, "unknown": 3}
 IMPORTANCE_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -97,9 +99,17 @@ class _BudgetedWriter:
     FOOTER = "\n[Budget-truncated selection; query the database directly for the remainder.]\n"
 
     def __init__(self, header, max_chars):
-        self.text = header
-        self.budget = max_chars - len(self.FOOTER)
+        if type(max_chars) is not int or max_chars < 1:
+            raise ValueError('max_chars must be a positive integer.')
+        self.footer = self.FOOTER if max_chars >= len(self.FOOTER) else '[Truncated]\n'
+        if len(self.footer) > max_chars:
+            self.footer = ''
+        self.text = ''
+        self.budget = max_chars - len(self.footer)
         self.truncated = False
+        # Headers (paths/descriptions included) must obey the same hard cap.
+        for line in header.splitlines():
+            self.add([line])
 
     def add(self, section_lines):
         addition = "\n".join(section_lines) + "\n"
@@ -111,15 +121,35 @@ class _BudgetedWriter:
 
     def finish(self):
         if self.truncated:
-            self.text += self.FOOTER
+            self.text += self.footer
         return self.text
+
+
+def _research_lines(connection, version, kind, row_id, text):
+    lines = [text]
+    if version >= 2:
+        evidence = fetch_evidence(connection, kind, row_id, limit=MAX_EVIDENCE_PER_RECORD)
+        if evidence['total']:
+            labels = '; '.join(evidence_label(item) for item in evidence['items'])
+            remaining = evidence['total'] - len(evidence['items'])
+            suffix = f'; +{remaining} more (list_evidence)' if remaining else ''
+            lines.append(f'  Evidence ({kind} #{row_id}): {labels}{suffix}')
+    return lines
+
+
+def _validate_row_limit(value, label):
+    if type(value) is not int or value < 0:
+        raise ValueError(f'{label} must be a nonnegative integer.')
 
 
 def build_context(database=None, run_id=None, max_chars=DEFAULT_MAX_CHARS,
                    max_events=DEFAULT_MAX_EVENTS, max_research_rows=DEFAULT_MAX_RESEARCH_ROWS):
     """Render the packet; truncates by section rather than mid-line."""
+    _validate_row_limit(max_events, 'max_events')
+    _validate_row_limit(max_research_rows, 'max_research_rows')
     with closing(connect_database(database, read_only=True)) as connection:
-        validate_schema_version(connection)
+        version = validate_schema_version(connection)
+        connection.execute('BEGIN')
         run = _fetch_run(connection, run_id)
         errors = _fetch_errors(connection, run['id'])
         events = _fetch_events(connection, run['id'])
@@ -156,7 +186,8 @@ def build_context(database=None, run_id=None, max_chars=DEFAULT_MAX_CHARS,
         for unknown in shown_unknowns:
             subject = _entity_label(connection, unknown['subject_entity_id'])
             prefix = f"[{unknown['importance']}]" + (f" ({subject})" if subject else "")
-            if not add([f"- {prefix} {unknown['question']}"]):
+            if not add(_research_lines(connection, version, 'unknown', unknown['id'],
+                                       f"- {prefix} {unknown['question']}")):
                 break
 
         shown_findings = findings[:max_research_rows]
@@ -166,7 +197,8 @@ def build_context(database=None, run_id=None, max_chars=DEFAULT_MAX_CHARS,
         for finding in shown_findings:
             subject = _entity_label(connection, finding['subject_entity_id']) or finding['subject_text']
             prefix = f"[{finding['confidence']}]" + (f" ({subject})" if subject else "")
-            if not add([f"- {prefix} {finding['finding']}"]):
+            if not add(_research_lines(connection, version, 'finding', finding['id'],
+                                       f"- {prefix} {finding['finding']}")):
                 break
 
         shown_decisions = decisions[:max_research_rows]
@@ -174,7 +206,8 @@ def build_context(database=None, run_id=None, max_chars=DEFAULT_MAX_CHARS,
         if not shown_decisions:
             add(["(none recorded yet)"])
         for decision in shown_decisions:
-            if not add([f"- {decision['topic']}: {decision['decision']} — {decision['reason']}"]):
+            if not add(_research_lines(connection, version, 'decision', decision['id'],
+                                       f"- {decision['topic']}: {decision['decision']} — {decision['reason']}")):
                 break
 
         return writer.finish()
@@ -231,8 +264,10 @@ def build_entity_context(database=None, entity_id=None, entity_name=None,
         raise ValueError('Specify only one of entity_id or entity_name.')
     if entity_id is None and entity_name is None:
         raise ValueError('An entity is required: specify entity_id or entity_name.')
+    _validate_row_limit(max_research_rows, 'max_research_rows')
     with closing(connect_database(database, read_only=True)) as connection:
-        validate_schema_version(connection)
+        version = validate_schema_version(connection)
+        connection.execute('BEGIN')
         if entity_name is not None:
             entity_id = resolve_entity_name(connection, entity_name)
         entity = _fetch_entity(connection, entity_id)
@@ -252,7 +287,8 @@ def build_entity_context(database=None, entity_id=None, entity_name=None,
         if not shown_findings:
             add(["(none recorded)"])
         for finding in shown_findings:
-            if not add([f"- [{finding['status']}, {finding['confidence']}] {finding['finding']}"]):
+            if not add(_research_lines(connection, version, 'finding', finding['id'],
+                                       f"- [{finding['status']}, {finding['confidence']}] {finding['finding']}")):
                 break
 
         shown_unknowns = unknowns[:max_research_rows]
@@ -260,7 +296,8 @@ def build_entity_context(database=None, entity_id=None, entity_name=None,
         if not shown_unknowns:
             add(["(none recorded)"])
         for unknown in shown_unknowns:
-            if not add([f"- [{unknown['status']}, {unknown['importance']}] {unknown['question']}"]):
+            if not add(_research_lines(connection, version, 'unknown', unknown['id'],
+                                       f"- [{unknown['status']}, {unknown['importance']}] {unknown['question']}")):
                 break
 
         shown_decisions = decisions[:max_research_rows]
@@ -268,7 +305,8 @@ def build_entity_context(database=None, entity_id=None, entity_name=None,
         if not shown_decisions:
             add(["(none recorded)"])
         for decision in shown_decisions:
-            if not add([f"- [{decision['status']}] {decision['topic']}: {decision['decision']} — {decision['reason']}"]):
+            if not add(_research_lines(connection, version, 'decision', decision['id'],
+                                       f"- [{decision['status']}] {decision['topic']}: {decision['decision']} — {decision['reason']}")):
                 break
 
         shown_relationships = relationships[:max_research_rows]

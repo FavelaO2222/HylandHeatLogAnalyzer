@@ -1,4 +1,4 @@
--- Authoritative fresh-database schema v2. db.initialize_database migrates v1 explicitly.
+-- Authoritative fresh-database schema. Version changes require a future migration.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 2);
+INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 1);
 
 -- Raw evidence references. created_at is the optional original artifact time.
 CREATE TABLE IF NOT EXISTS source_artifacts (
@@ -150,34 +150,3 @@ CREATE INDEX IF NOT EXISTS idx_relationships_source_type ON relationships (sourc
 CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships (target_entity_id);
 CREATE INDEX IF NOT EXISTS idx_relationships_artifact ON relationships (source_artifact_id);
 CREATE INDEX IF NOT EXISTS idx_relationships_run ON relationships (test_run_id);
-
--- Generic application API, concrete foreign keys: exactly one owner and target.
--- Existing finding provenance and decisions.finding_id remain independent links.
-CREATE TABLE IF NOT EXISTS evidence_links (
-    id INTEGER PRIMARY KEY,
-    finding_id INTEGER REFERENCES findings(id) ON DELETE RESTRICT CHECK (finding_id > 0),
-    unknown_id INTEGER REFERENCES unknowns(id) ON DELETE RESTRICT CHECK (unknown_id > 0),
-    decision_id INTEGER REFERENCES decisions(id) ON DELETE RESTRICT CHECK (decision_id > 0),
-    test_run_id INTEGER REFERENCES test_runs(id) ON DELETE RESTRICT CHECK (test_run_id > 0),
-    event_id INTEGER REFERENCES events(id) ON DELETE RESTRICT CHECK (event_id > 0),
-    error_id INTEGER REFERENCES errors(id) ON DELETE RESTRICT CHECK (error_id > 0),
-    entity_id INTEGER REFERENCES entities(id) ON DELETE RESTRICT CHECK (entity_id > 0),
-    relationship_id INTEGER REFERENCES relationships(id) ON DELETE RESTRICT CHECK (relationship_id > 0),
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    CHECK ((finding_id IS NOT NULL) + (unknown_id IS NOT NULL) + (decision_id IS NOT NULL) = 1),
-    CHECK ((test_run_id IS NOT NULL) + (event_id IS NOT NULL) + (error_id IS NOT NULL)
-           + (entity_id IS NOT NULL) + (relationship_id IS NOT NULL) = 1)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_links_pair ON evidence_links (
-    ifnull(finding_id, 0), ifnull(unknown_id, 0), ifnull(decision_id, 0),
-    ifnull(test_run_id, 0), ifnull(event_id, 0), ifnull(error_id, 0),
-    ifnull(entity_id, 0), ifnull(relationship_id, 0)
-);
-CREATE INDEX IF NOT EXISTS idx_evidence_links_finding ON evidence_links (finding_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_links_unknown ON evidence_links (unknown_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_links_decision ON evidence_links (decision_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_links_run ON evidence_links (test_run_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_links_event ON evidence_links (event_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_links_error ON evidence_links (error_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_links_entity ON evidence_links (entity_id);
-CREATE INDEX IF NOT EXISTS idx_evidence_links_relationship ON evidence_links (relationship_id);

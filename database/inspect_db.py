@@ -15,7 +15,8 @@ def inspect_database(database=None, latest_run=False):
     with closing(connect_database(database, read_only=True)) as connection:
         version = validate_schema_version(connection)
         # Identifiers come only from this fixed tuple, never from CLI input.
-        counts = {table: connection.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in TABLES}
+        tables = TABLES + ('evidence_links',) if version >= 2 else TABLES
+        counts = {table: connection.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in tables}
         lines = [f'Database schema: {version}', '']
         lines.extend(f"{table.replace('_', ' ').capitalize()}: {count}" for table, count in counts.items())
         if latest_run:

@@ -17,8 +17,8 @@ import sqlite3
 
 from mcp.server.mcpserver import MCPServer
 
-from . import (backup, context_builder, entity_extraction, inspect_db, record_decision, record_finding,
-               record_relationship, record_unknown)
+from . import (backup, context_builder, entity_extraction, evidence, inspect_db, record_decision, record_finding,
+               record_relationship, record_unknown, run_comparison)
 from .db import database_exists, initialize_database, resolve_database_path
 
 mcp = MCPServer('hyland-heat-research-db')
@@ -205,6 +205,48 @@ def list_relationships(relationship_type: str | None = None, entity_id: int | No
         record_relationship.format_relationship_row(row)
         for row in record_relationship.list_relationships(_db(), relationship_type, entity_id)
     ) or 'No relationships recorded.')
+
+
+@mcp.tool(structured_output=True)
+def attach_evidence(record_type: str, record_id: int, target_type: str, target_id: int) -> dict[str, object]:
+    """Explicitly attach evidence to a finding/unknown/decision; never changes confidence or status.
+
+    target_type: run, event, error, entity, relationship. IDs must exist. Requires schema v2.
+    Repeating the same pair returns the existing evidence-link ID.
+    """
+    try:
+        return {'id': evidence.attach_evidence(_db(), record_type, record_id, target_type, target_id),
+                'record_type': record_type, 'record_id': record_id,
+                'target_type': target_type, 'target_id': target_id}
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool(structured_output=True)
+def list_evidence(record_type: str, record_id: int, limit: int = 20, offset: int = 0) -> dict[str, object]:
+    """List explicit attached evidence in attachment-ID order, with total and next_offset.
+
+    record_type: finding, unknown, decision. limit is 1-100. Requires schema v2.
+    Legacy finding artifact/run columns and decision.finding_id remain independent.
+    """
+    try:
+        return evidence.list_evidence(_db(), record_type, record_id, limit=limit, offset=offset)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool(structured_output=True)
+def compare_runs(run_a: int, run_b: int, limit: int = 8) -> dict[str, object]:
+    """Return bounded structured differences from run A to B using exact stored fields.
+
+    Each difference list contains total/items/omitted; limit is 1-100. Repeated event counts
+    use the known ingestion manifest when available. Entity presence means unambiguous
+    cataloged names explicitly tagged in stored messages, never inferred lifecycle behavior.
+    """
+    try:
+        return run_comparison.compare_runs(run_a, run_b, _db(), limit=limit)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
 
 
 @mcp.tool()

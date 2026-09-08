@@ -185,7 +185,7 @@ class IngestionTests(unittest.TestCase):
     def test_incompatible_version_not_recreated(self):
         initialize_database(self.database)
         with closing(connect_database(self.database)) as connection, connection:
-            connection.execute('UPDATE schema_metadata SET schema_version=2')
+            connection.execute('UPDATE schema_metadata SET schema_version=999')
         before = self.database.read_bytes()
         report, capture = self.prepare()
         with self.assertRaisesRegex(ValueError, 'version'):
@@ -242,7 +242,7 @@ class IngestionTests(unittest.TestCase):
         self.import_log()
         before = self.database.read_bytes()
         summary = inspect_database(self.database, True)
-        self.assertIn('Database schema: 1', summary)
+        self.assertIn('Database schema: 2', summary)
         self.assertIn('Errors: 1', summary)
         for name in ('Entities', 'Findings', 'Unknowns', 'Decisions', 'Relationships'):
             self.assertIn(f'{name}: 0', summary)

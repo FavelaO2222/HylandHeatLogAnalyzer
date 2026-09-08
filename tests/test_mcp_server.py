@@ -8,6 +8,7 @@ schema generation, a tool never actually getting registered).
 """
 
 from contextlib import closing
+import asyncio
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ from database.mcp_server import (
     build_entity_context, configure, inspect_database, list_decisions, list_entities, list_findings,
     list_relationships, list_unknowns, mcp, sync_entities, update_decision_status, update_finding_status,
     update_unknown_status,
+    attach_evidence, list_evidence, compare_runs,
 )
 
 
@@ -52,6 +54,28 @@ class McpServerToolTests(unittest.TestCase):
 
     def test_configure_initializes_missing_database(self):
         self.assertTrue(self.path.exists())
+
+    def test_evidence_tools_return_structured_provenance(self):
+        run_id, _ = self.seed_run_with_identity_event()
+        add_finding('Explicitly linked')
+        result = attach_evidence('finding', 1, 'run', run_id)
+        self.assertEqual(result['id'], 1)
+        self.assertEqual(attach_evidence('finding', 1, 'run', run_id), result)
+        self.assertEqual(list_evidence('finding', 1)['items'][0]['target_id'], run_id)
+        self.assertIn('Evidence (finding #1): Run #1', build_context())
+
+    def test_evidence_and_comparison_errors_are_actionable(self):
+        add_finding('Explicitly linked')
+        for result in (attach_evidence('finding', 1, 'bad', 1), attach_evidence('finding', 1, 'run', 999),
+                       list_evidence('unknown', 999), list_evidence('finding', 1, limit=0), compare_runs(1, 999)):
+            self.assertIn('error', result)
+        self.assertEqual(list_evidence('finding', 1)['total'], 0)
+
+    def test_compare_runs_returns_structured_identical_result(self):
+        run_id, _ = self.seed_run_with_identity_event()
+        result = compare_runs(run_id, run_id)
+        self.assertTrue(result['identical'])
+        self.assertEqual(result['events']['added'], {'total': 0, 'items': [], 'omitted': 0})
 
     def test_db_helper_requires_configure(self):
         mcp_server._database = None
@@ -214,7 +238,7 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
                              'add_decision', 'list_decisions', 'update_decision_status',
                              'add_relationship', 'list_relationships',
                              'sync_entities', 'list_entities', 'build_context', 'build_entity_context',
-                             'inspect_database', 'backup_database'):
+                             'inspect_database', 'backup_database', 'attach_evidence', 'list_evidence', 'compare_runs'):
                 self.assertIn(expected, names)
 
             result = await client.call_tool('add_finding', {'finding': 'Protocol round trip works'})
@@ -223,6 +247,29 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
 
             result = await client.call_tool('list_findings', {})
             self.assertIn('Protocol round trip works', result.content[0].text)
+
+    async def test_phase4_tools_over_json_rpc_transport(self):
+        from mcp.client.client import Client
+        from phase4_fixtures import seed
+        with closing(db.connect_database(self.path)) as connection:
+            seed(connection)
+            with connection:
+                connection.execute("UPDATE test_runs SET result='FAIL' WHERE id=2")
+        # Force JSON-RPC framing: the SDK's default in-process mode now dispatches directly.
+        async with asyncio.timeout(30), Client(mcp, mode='legacy') as client:
+            result = await client.call_tool('attach_evidence',
+                {'record_type': 'finding', 'record_id': 1, 'target_type': 'event', 'target_id': 1})
+            self.assertFalse(result.is_error)
+            self.assertEqual(result.structured_content['id'], 1)
+            result = await client.call_tool('list_evidence', {'record_type': 'finding', 'record_id': 1})
+            self.assertEqual(result.structured_content['total'], 1)
+            result = await client.call_tool('compare_runs', {'run_a': 1, 'run_b': 2, 'limit': 1})
+            self.assertFalse(result.is_error)
+            self.assertEqual(result.structured_content['metadata']['items'][0]['field'], 'result')
+            self.assertFalse(result.structured_content['identical'])
+            result = await client.call_tool('attach_evidence',
+                {'record_type': 'finding', 'record_id': 1, 'target_type': 'event', 'target_id': 999})
+            self.assertIn('No event', result.structured_content['error'])
 
 
 if __name__ == '__main__':

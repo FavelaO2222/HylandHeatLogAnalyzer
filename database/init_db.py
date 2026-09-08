@@ -1,4 +1,4 @@
-"""Create the research schema without importing logs or generating findings."""
+"""Create or migrate the research schema without importing logs or generating findings."""
 
 import argparse
 import sqlite3

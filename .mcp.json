@@ -5,7 +5,7 @@
       "command": "bash",
       "args": [
         "-c",
-        "cd '/home/oska/PycharmProjects/PythonProject/HylandHeatLogAnalyzer' && exec python3 -m database.mcp_server --database data/hylandheat.db"
+        "cd '/home/oska/PycharmProjects/PythonProject/HylandHeatLogAnalyzer' && exec .venv/bin/python -m database.mcp_server --database data/hylandheat.db"
       ]
     }
   }

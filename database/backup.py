@@ -10,9 +10,11 @@ brand-new file, never overwrites an existing one.
 
 import argparse
 from contextlib import closing
+import os
 from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 
 from .db import PROJECT_ROOT, connect_database, resolve_database_path, validate_schema_version
 
@@ -35,15 +37,30 @@ def dump_database(database=None, backup=None):
     backing up a corrupted database.
     """
     backup_path = resolve_backup_path(backup)
+    source_path = resolve_database_path(database)
+    if backup_path == source_path or (backup_path.exists() and source_path.exists()
+                                      and backup_path.samefile(source_path)):
+        raise ValueError('Backup destination cannot be the source database or an alias of it.')
     with closing(connect_database(database, read_only=True)) as connection:
         validate_schema_version(connection)
+        connection.execute('BEGIN')
         violations = connection.execute('PRAGMA foreign_key_check').fetchall()
         if violations:
             raise ValueError(f'Source database fails its own foreign key check: {violations}')
         backup_path.parent.mkdir(parents=True, exist_ok=True)
-        with backup_path.open('w', encoding='utf-8') as handle:
-            for line in connection.iterdump():
-                handle.write(line + '\n')
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=backup_path.parent,
+                                             prefix=backup_path.name + '.', suffix='.tmp', delete=False) as handle:
+                temporary = Path(handle.name)
+                for line in connection.iterdump():
+                    handle.write(line + '\n')
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, backup_path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     return backup_path
 
 
@@ -64,6 +81,9 @@ def restore_database(database, backup=None):
     if target.exists():
         raise ValueError(f'{target} already exists; refusing to overwrite an existing database.')
     target.parent.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation closes the exists()/connect() overwrite race.
+    with target.open('xb'):
+        pass
     connection = sqlite3.connect(target)
     try:
         connection.executescript(dump_path.read_text(encoding='utf-8'))

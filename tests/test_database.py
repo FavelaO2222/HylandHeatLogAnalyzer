@@ -17,7 +17,7 @@ from database.init_db import main
 
 class DatabaseTests(unittest.TestCase):
     TABLES = {'schema_metadata', 'source_artifacts', 'test_runs', 'events', 'errors',
-              'entities', 'findings', 'unknowns', 'decisions', 'relationships'}
+              'entities', 'findings', 'unknowns', 'decisions', 'relationships', 'evidence_links'}
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -43,7 +43,7 @@ class DatabaseTests(unittest.TestCase):
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertEqual(tables, self.TABLES)
         version = connection.execute('SELECT * FROM schema_metadata').fetchone()
-        self.assertEqual(version['schema_version'], 1)
+        self.assertEqual(version['schema_version'], db.SCHEMA_VERSION)
         self.assertTrue(version['created_at'].endswith('Z'))
         self.assertEqual(connection.execute('SELECT count(*) FROM source_artifacts').fetchone()[0], 0)
         self.assertEqual(connection.execute('SELECT count(*) FROM findings').fetchone()[0], 0)
@@ -214,10 +214,10 @@ class DatabaseTests(unittest.TestCase):
         connection = self.open_database()
         with connection:
             self.artifact(connection)
-            connection.execute('UPDATE schema_metadata SET schema_version=?', (2,))
+            connection.execute('UPDATE schema_metadata SET schema_version=?', (db.SCHEMA_VERSION + 1,))
         with self.assertRaises(ValueError):
             db.initialize_database(self.path)
-        self.assertEqual(connection.execute('SELECT schema_version FROM schema_metadata').fetchone()[0], 2)
+        self.assertEqual(connection.execute('SELECT schema_version FROM schema_metadata').fetchone()[0], db.SCHEMA_VERSION + 1)
         self.assertEqual(connection.execute('SELECT count(*) FROM source_artifacts').fetchone()[0], 1)
 
     def test_unversioned_database_rejected_without_mutation(self):
@@ -244,7 +244,7 @@ class DatabaseTests(unittest.TestCase):
         with closing(sqlite3.connect(self.root / 'direct.sqlite3')) as connection:
             connection.executescript(db.SCHEMA_PATH.read_text(encoding='utf-8'))
             self.assertEqual(connection.execute('PRAGMA foreign_keys').fetchone()[0], 1)
-            self.assertEqual(connection.execute('SELECT schema_version FROM schema_metadata').fetchone()[0], 1)
+            self.assertEqual(connection.execute('SELECT schema_version FROM schema_metadata').fetchone()[0], db.SCHEMA_VERSION)
 
 
 if __name__ == '__main__':
