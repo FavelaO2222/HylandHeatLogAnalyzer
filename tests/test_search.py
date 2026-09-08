@@ -58,6 +58,31 @@ class SearchFixture:
 
 
 class SearchFunctionTests(SearchFixture, unittest.TestCase):
+    def test_dotted_symbol_query_does_not_raise_fts5_syntax_error(self):
+        # Regression test: a bare "." between word characters used to reach
+        # FTS5 as literal query syntax ("fts5: syntax error near \".\"") for
+        # any dotted C# symbol, e.g. "NPC.EnterBuilding" -- every one of the
+        # priority research symbols contains one.
+        artifact_id = self.artifact()
+        run_id = self.run_(artifact_id)
+        self.event(run_id, artifact_id, 'NPC EnterBuilding invoked for officerlee2')
+        result = search.search(self.path, 'NPC.EnterBuilding', type='events')
+        self.assertEqual(len(result['items']), 1)
+
+    def test_dotted_symbol_still_matches_documents_split_across_two_words(self):
+        artifact_id = self.artifact()
+        run_id = self.run_(artifact_id)
+        self.event(run_id, artifact_id, 'PoliceStation registry updated for PullOfficer call')
+        result = search.search(self.path, 'PoliceStation.PullOfficer', type='events')
+        self.assertEqual(len(result['items']), 1)
+
+    def test_quoted_phrase_and_boolean_syntax_are_left_untouched(self):
+        artifact_id = self.artifact()
+        run_id = self.run_(artifact_id)
+        self.event(run_id, artifact_id, 'exact phrase match here')
+        result = search.search(self.path, '"exact phrase"', type='events')
+        self.assertEqual(len(result['items']), 1)
+
     def test_finds_matching_events_and_errors_ranked_by_relevance(self):
         artifact_id = self.artifact()
         run_id = self.run_(artifact_id)

@@ -21,6 +21,7 @@ Ranking is FTS5's built-in bm25(); no embeddings or external services.
 import argparse
 from contextlib import closing
 import json
+import re
 import sqlite3
 import sys
 
@@ -28,6 +29,12 @@ from .db import SCHEMA_PATH, connect_database, validate_schema_version
 from .evidence import bounded_limit
 
 SOURCES = ('events', 'errors', 'documents')
+# A dot between word characters is FTS5 query syntax (a token separator, not
+# a searchable character), but callers routinely search for dotted C# symbols
+# like "NPC.EnterBuilding" meaning it literally. Splitting it into two tokens
+# ("NPC EnterBuilding") searches for both words rather than erroring out, and
+# leaves everything else -- quoted phrases, *, AND/OR/NOT -- untouched.
+DOTTED_SYMBOL_SEPARATOR = re.compile(r'(?<=\w)\.(?=\w)')
 SNIPPET_PREFIX, SNIPPET_SUFFIX, SNIPPET_ELLIPSIS, SNIPPET_TOKENS = '>>', '<<', ' … ', 12
 
 _EVENT_QUERY = '''
@@ -70,10 +77,11 @@ def search(database, query, *, type=None, limit=20):
         raise ValueError('query must not be empty.')
     bounded_limit(limit)
     branches = _branches(type)
+    fts_query = DOTTED_SYMBOL_SEPARATOR.sub(' ', query)
     sql = ' UNION ALL '.join(branches) + ' ORDER BY score LIMIT ?'
     params = []
     for _ in branches:
-        params.extend((SNIPPET_PREFIX, SNIPPET_SUFFIX, SNIPPET_ELLIPSIS, SNIPPET_TOKENS, query))
+        params.extend((SNIPPET_PREFIX, SNIPPET_SUFFIX, SNIPPET_ELLIPSIS, SNIPPET_TOKENS, fts_query))
     params.append(limit + 1)
     with closing(connect_database(database, read_only=True)) as connection:
         validate_schema_version(connection, minimum=4)

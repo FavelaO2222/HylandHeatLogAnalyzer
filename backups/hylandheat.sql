@@ -454,6 +454,20 @@ INSERT INTO "evidence_links" VALUES(3,1,NULL,NULL,NULL,346,NULL,NULL,NULL,'2026-
 INSERT INTO "evidence_links" VALUES(4,1,NULL,NULL,NULL,NULL,NULL,NULL,1,'2026-09-08T05:44:17.207Z');
 INSERT INTO "evidence_links" VALUES(5,2,NULL,NULL,1,NULL,NULL,NULL,NULL,'2026-09-08T06:07:47.318Z');
 INSERT INTO "evidence_links" VALUES(6,2,NULL,NULL,2,NULL,NULL,NULL,NULL,'2026-09-08T06:07:47.584Z');
+CREATE TABLE experiment_symbols (
+    id INTEGER PRIMARY KEY,
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE RESTRICT,
+    symbol TEXT NOT NULL CHECK (length(trim(symbol)) > 0)
+);
+CREATE TABLE experiments (
+    id INTEGER PRIMARY KEY,
+    question TEXT NOT NULL CHECK (length(trim(question)) > 0),
+    observed_result TEXT NOT NULL CHECK (length(trim(observed_result)) > 0),
+    source_artifact_id INTEGER REFERENCES source_artifacts(id) ON DELETE RESTRICT,
+    test_run_id INTEGER REFERENCES test_runs(id) ON DELETE RESTRICT,
+    mod_build TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
 CREATE TABLE findings (
     id INTEGER PRIMARY KEY,
     subject_entity_id INTEGER REFERENCES entities(id) ON DELETE RESTRICT,
@@ -487,7 +501,7 @@ CREATE TABLE schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT INTO "schema_metadata" VALUES(1,4,'2026-09-08T01:58:01.369Z','2026-09-08T16:06:46.032Z');
+INSERT INTO "schema_metadata" VALUES(1,5,'2026-09-08T01:58:01.369Z','2026-09-08T18:52:37.814Z');
 CREATE TABLE source_artifacts (
     id INTEGER PRIMARY KEY,
     artifact_type TEXT NOT NULL CHECK (artifact_type IN
@@ -504,6 +518,7 @@ INSERT INTO "source_artifacts" VALUES(1,'log','/home/oska/RiderProjects/HylandHe
 INSERT INTO "source_artifacts" VALUES(2,'log','/home/oska/.steam/debian-installation/steamapps/common/Schedule I/MelonLoader/Latest.log','Latest.log','f6d141069bb02fcccf00eb172d331e08b57cbb93b650c2fd7178e7c4ed595122',NULL,'2026-09-08T06:07:00.506Z','Raw log; path records first registration. Original creation time is unknown.');
 INSERT INTO "source_artifacts" VALUES(3,'source_code','/home/oska/RiderProjects/HylandHeat','HylandHeat',NULL,NULL,'2026-09-08T16:09:13.796Z','{"file_count": 45, "skipped": 0, "mod_revision": "ad2bfc0"}');
 INSERT INTO "source_artifacts" VALUES(4,'decompiler_export','/home/oska/.steam/debian-installation/steamapps/common/Schedule I/MelonLoader/Il2CppAssemblies/Assembly-CSharp.dll','Assembly-CSharp.dll',NULL,NULL,'2026-09-08T16:14:04.790Z','{"file_count": 1965, "skipped": 0, "mod_revision": null, "decompiler": "ilspycmd 11.0.0.9375", "namespace_filter": "Il2CppScheduleOne*"}');
+INSERT INTO "source_artifacts" VALUES(5,'source_code','/tmp/hylandheat-source-clean','hylandheat-source-clean',NULL,NULL,'2026-09-08T18:53:54.100Z','{"file_count": 0, "unchanged": 45, "undecodable": 0, "mod_revision": "ad2bfc0-dirty"}');
 CREATE TABLE test_runs (
     id INTEGER PRIMARY KEY,
     source_artifact_id INTEGER REFERENCES source_artifacts(id) ON DELETE RESTRICT,
@@ -597,4 +612,8 @@ CREATE TRIGGER errors_fts_au AFTER UPDATE ON errors BEGIN
     INSERT INTO errors_fts(rowid, message, component, stack_trace)
     VALUES (new.id, new.message, new.component, new.stack_trace);
 END;
+CREATE INDEX idx_experiments_artifact ON experiments (source_artifact_id);
+CREATE INDEX idx_experiments_run ON experiments (test_run_id);
+CREATE INDEX idx_experiment_symbols_symbol ON experiment_symbols (symbol);
+CREATE INDEX idx_experiment_symbols_experiment ON experiment_symbols (experiment_id);
 COMMIT;
