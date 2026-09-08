@@ -512,9 +512,40 @@ one is linked. Every section is capped at `--max-research-rows` and shows
 would exceed `--max-chars`, later rows in whichever section hits the limit are
 dropped and a truncation footer is appended; nothing is ever cut mid-line.
 
-This only queries; it never writes, infers a finding, or discovers an entity.
-Phase 3 still has no research-note import, entity discovery, automatic
-findings/unknowns/decisions population, assembly/source scanning, patrol
-ingestion, FTS, embeddings, vector search, RAG, MCP, or LLM/model integration.
-Right now `entities`/`findings`/`unknowns`/`decisions` only get populated by
-hand-written SQL against the schema in [Schema and Design Choices](#schema-and-design-choices).
+The context builder only queries; it never writes, infers a finding, or
+discovers an entity.
+
+### Entity extraction
+
+`database/entity_extraction.py` catalogs recurring named subjects already
+present in ingested event/error messages, so they exist as rows other tools
+(and future manual research entries) can reference by ID instead of by
+re-typed string.
+
+```bash
+python -m database.entity_extraction --database data/hylandheat.db
+python -m database.entity_extraction --database data/hylandheat.db --run 3
+```
+
+It recognizes a value only when it is tagged by one of a fixed set of exact
+identity keys observed in HylandHeat logs (`Name=`, `Source=`, `Root=`,
+`Clone=`, `SourcePath=`, `ClonePath=`, `SourceObject=`, `CloneObject=`); a key
+must appear as a whole word, so a camelCase merge like `IsActualRoot=` or
+`SourceBakedGUID=` is deliberately not a match, and a path value like
+`SourcePath=OfficerLee2/Avatar` is cut at the first `/`. Booleans, bare
+numbers, and GUIDs never pass as names. Without `--run`, every event/error
+ever ingested is scanned, since the catalog is meant to accumulate across
+runs; `--run` scopes a scan to one run's evidence only. Matching entities are
+inserted once under `entity_type='game_object'`, deduped case-insensitively
+against `canonical_name` within that type only — a manually curated entity of
+a different `entity_type` sharing the same name is left alone, and re-running
+is idempotent (already-cataloged names are reported, not re-inserted).
+
+This still creates no findings, unknowns, decisions, or relationships, and
+recognizes nothing beyond that fixed key list — a differently named or
+differently tagged identifier is left uncatalogued rather than guessed at.
+Phase 3 still has no research-note import, automatic findings/unknowns/decisions
+population, assembly/source scanning, patrol ingestion, FTS, embeddings,
+vector search, RAG, MCP, or LLM/model integration. `findings`/`unknowns`/
+`decisions` still only get populated by hand-written SQL against the schema in
+[Schema and Design Choices](#schema-and-design-choices).
