@@ -142,6 +142,47 @@ class ResearchFunctionTests(ResearchFixture, unittest.TestCase):
         self.assertEqual(result['sections']['events']['total'], 1)
         self.assertIn('GoonPool', result['sections']['events']['items'][0]['snippet'])
 
+    def test_camel_case_symbol_matches_spaced_log_text(self):
+        artifact_id = self.artifact()
+        run_id = self.run_(artifact_id)
+        self.event(run_id, artifact_id, 'ENTER BUILDING BEFORE: OfficerLee2 ActiveSelf=True')
+        result = research.research(self.path, 'NPC.EnterBuilding')
+        self.assertEqual(result['sections']['events']['total'], 1)
+        snippet = result['sections']['events']['items'][0]['snippet']
+        self.assertIn('ENTER', snippet)
+        self.assertIn('BUILDING', snippet)
+
+    def test_dotted_symbol_events_broaden_independently_when_mod_source_already_matched(self):
+        # Regression: mod_source/decompiled matching "NPC.EnterBuilding" under AND used to
+        # suppress the whole-packet OR fallback, so events stayed empty even though the log
+        # line only ever names the specific clone ("OFFICERLEE2 ENTER BUILDING..."), never the
+        # generic type "NPC" -- the second AND-required token.
+        self.document('HylandHeat/Debug/PoliceActivationDebugPatch.cs',
+                      'NPC.EnterBuilding(connection, buildingGUID, doorIndex);', artifact_type='source_code')
+        artifact_id = self.artifact()
+        run_id = self.run_(artifact_id)
+        self.event(run_id, artifact_id, 'OFFICERLEE2 ENTER BUILDING BEFORE: ActiveSelf=True')
+        # An unrelated event that only contains the generic secondary token ("NPC") must not
+        # surface: broadening on that bare, non-splittable token turned this into "match nearly
+        # any event" in practice (100+ live-DB hits) since it appears throughout unrelated log
+        # lines -- the fix retries with only the primary token (EnterBuilding), never tokens[1:].
+        self.event(run_id, artifact_id, 'GOON LIFECYCLE: Method=CartelGoon.NPC.Awake')
+        result = research.research(self.path, 'NPC.EnterBuilding')
+        self.assertEqual(result['mode'], 'and')  # mod_source/decompiled still found an exact match
+        self.assertGreaterEqual(result['sections']['mod_source']['total'], 1)
+        self.assertEqual(result['sections']['events']['total'], 1)
+        self.assertTrue(result['sections']['events'].get('broadened'))
+        self.assertIn('ENTER', result['sections']['events']['items'][0]['snippet'])
+
+    def test_camel_case_normalization_does_not_widen_source_matching(self):
+        # A source file mentioning only "Enter" and "Building" as unrelated
+        # separate identifiers must not count as a match for "EnterBuilding":
+        # normalize_case is for events/errors free text only (see unknown #3).
+        self.document('HylandHeat/Unrelated.cs',
+                      'void Enter() {}\nvoid Building() {}', artifact_type='source_code')
+        result = research.research(self.path, 'EnterBuilding')
+        self.assertEqual(result['sections']['mod_source']['total'], 0)
+
     def test_related_findings_are_included(self):
         self.finding('GoonPool appears capped at 20 concurrent goons.')
         result = research.research(self.path, 'GoonPool')

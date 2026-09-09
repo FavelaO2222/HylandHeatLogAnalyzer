@@ -281,12 +281,54 @@ def _next_target(sections, tokens):
     return 'All evidence categories have at least one match; consider recording an experiment or finding summarizing this.'
 
 
-def _fts_query(tokens, *, mode='and'):
+_CAMEL_PART = re.compile(r'[A-Z]+(?=[A-Z][a-z]|\b)|[A-Z]?[a-z0-9]+|[A-Z]+|\d+')
+
+
+def _split_camel(token):
+    """Subwords of a camelCase/PascalCase identifier ("EnterBuilding" ->
+    ["Enter", "Building"]), or None when the token has no internal case
+    boundary to split on ("NPC", "id"). Used only to widen an events/errors
+    FTS match, never the source/decompiled one, where the identifier
+    already appears verbatim as written in code (see unknown #3: runtime
+    log text spells a code symbol as spaced human-readable words, e.g.
+    "ENTER BUILDING", never as the one-token identifier "EnterBuilding")."""
+    parts = _CAMEL_PART.findall(token)
+    return parts if len(parts) > 1 else None
+
+
+def _fts_term(token, *, normalize_case):
+    """One token's FTS5 query fragment. Plain when normalize_case is False
+    (source/decompiled sections: exact identifier match only). When True
+    and the token is a splittable compound identifier, widen it to also
+    accept its space-separated subwords together, so a query for
+    "EnterBuilding" also matches log text tokenized as "ENTER" "BUILDING"
+    without losing the precise one-token match for code that does spell it
+    as a single identifier."""
+    if not normalize_case:
+        return token
+    parts = _split_camel(token)
+    return f'({token} OR ({" ".join(parts)}))' if parts else token
+
+
+def _fts_query(tokens, *, mode='and', normalize_case=False):
     """Build an FTS5 MATCH expression from already-extracted, punctuation-free
     tokens, never from raw query text -- so arbitrary input (a full natural-
     language question, with "?" and other characters that are FTS5 syntax,
-    not searchable content) can never reach FTS5 as invalid syntax."""
-    return ' '.join(tokens) if mode == 'and' else ' OR '.join(tokens)
+    not searchable content) can never reach FTS5 as invalid syntax.
+
+    normalize_case widens each compound-identifier token to also match its
+    camelCase-split subwords (see _fts_term) -- pass True only for sections
+    indexing free-text runtime logs (events/errors), never for source code,
+    where the token should match the identifier exactly as written.
+
+    FTS5 only allows two parenthesized groups to sit next to each other
+    with an explicit "AND" between them (bare terms alone can just be
+    juxtaposed) -- normalize_case can produce such a group per token, so
+    'and' mode joins with explicit "AND" whenever it's on."""
+    terms = [_fts_term(token, normalize_case=normalize_case) for token in tokens]
+    if mode == 'and':
+        return (' AND ' if normalize_case else ' ').join(terms)
+    return ' OR '.join(terms)
 
 
 def research(database, query, *, limit=DEFAULT_LIMIT):
@@ -313,6 +355,7 @@ def research(database, query, *, limit=DEFAULT_LIMIT):
 
     def _sections(mode):
         fts_query = _fts_query(tokens, mode=mode)
+        log_fts_query = _fts_query(tokens, mode=mode, normalize_case=True)
         with closing(connect_database(database, read_only=True)) as connection:
             validate_schema_version(connection, minimum=5)
             try:
@@ -322,8 +365,11 @@ def research(database, query, *, limit=DEFAULT_LIMIT):
                 raise ValueError(f'Invalid search query syntax: {exc}') from exc
             records = _research_records_section(connection, tokens, limit)
             experiments = _experiments_section(connection, tokens, limit)
-        events = _search_section(database, fts_query, 'events', limit)
-        errors = _search_section(database, fts_query, 'errors', limit)
+        try:
+            events = _search_section(database, log_fts_query, 'events', limit)
+            errors = _search_section(database, log_fts_query, 'errors', limit)
+        except ValueError as exc:
+            raise ValueError(f'Invalid search query syntax: {exc}') from exc
         return {'mod_source': mod_source, 'decompiled': decompiled, 'events': events, 'errors': errors,
                 'records': records, 'experiments': experiments}
 
@@ -350,6 +396,24 @@ def research(database, query, *, limit=DEFAULT_LIMIT):
                                ('mod_source', 'decompiled', 'events', 'errors')):
         mode = 'or'
         sections = _sections(mode)
+
+    # events/errors are free runtime-log text, not code, so a multi-token symbol query can
+    # still find nothing there under AND even when mod_source/decompiled already matched (and
+    # so never triggered the whole-packet broaden above): e.g. "NPC.EnterBuilding" matches real
+    # declarations/patch sites, but a log line only ever names the specific clone ("OFFICERLEE2
+    # ENTER BUILDING..."), never the generic type "NPC". Retry with OR when AND left a section
+    # empty, rather than requiring every section to be empty first -- but using only tokens[0]
+    # (the primary/specific token _tokens() already ranks first; see its docstring), not every
+    # extracted token: OR-ing in a secondary/enclosing-type token like "NPC" here (bare, not
+    # camelCase-split, so it can't narrow itself the way "EnterBuilding" does) turned this into
+    # "match almost any event," since that word appears in unrelated lines throughout the log --
+    # verified live: 100+ events for the full-token OR, 7 for the primary-token-only OR.
+    if mode == 'and' and len(tokens) > 1:
+        broadened_log_query = _fts_query(tokens[:1], mode='or', normalize_case=True)
+        for key in ('events', 'errors'):
+            if sections[key]['total'] == 0:
+                sections[key] = dict(_search_section(database, broadened_log_query, key, limit), broadened=True)
+
     return {'query': query, 'limit': limit, 'mode': mode, 'sections': sections,
             'interpretation': _interpretation(sections), 'next_target': _next_target(sections, tokens)}
 
@@ -386,7 +450,9 @@ def format_research(result):
                 if result['mode'] == 'or' else '')
     lines = [f'# Research: "{result["query"]}"{mode_note}', '']
     for key, page in result['sections'].items():
-        lines.append(f"## {_SECTION_LABELS[key]}")
+        section_note = (' (broadened to match any extracted term; the exact AND-mode query '
+                        'found nothing here)' if page.get('broadened') else '')
+        lines.append(f"## {_SECTION_LABELS[key]}{section_note}")
         if not page['items']:
             lines.append('No matches found.')
         else:
