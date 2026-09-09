@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from database import db
-from database.record_finding import add_finding, list_findings, main, update_finding_status
+from database.record_finding import add_finding, format_finding_row, list_findings, main, update_finding_status
 
 
 class RecordFindingTests(unittest.TestCase):
@@ -128,6 +128,56 @@ class RecordFindingTests(unittest.TestCase):
         update_finding_status(self.path, finding_id, 'disproven')
         row = self.connection.execute('SELECT status FROM findings WHERE id = ?', (finding_id,)).fetchone()
         self.assertEqual(row['status'], 'disproven')
+
+    def test_superseded_by_recorded_and_shown_in_list_and_format(self):
+        old_id = add_finding(self.path, 'Earlier, now-wrong claim')
+        new_id = add_finding(self.path, 'Corrected claim')
+        update_finding_status(self.path, old_id, 'superseded', superseded_by_finding_id=new_id)
+        row = self.connection.execute(
+            'SELECT * FROM findings WHERE id = ?', (old_id,)).fetchone()
+        self.assertEqual(row['status'], 'superseded')
+        self.assertEqual(row['superseded_by_finding_id'], new_id)
+        listed = {r['id']: r for r in list_findings(self.path)}
+        self.assertEqual(listed[old_id]['superseded_by_finding_id'], new_id)
+        self.assertIn(f'(superseded by #{new_id})', format_finding_row(listed[old_id]))
+        self.assertNotIn('superseded by', format_finding_row(listed[new_id]))
+
+    def test_superseded_by_requires_superseded_status(self):
+        old_id = add_finding(self.path, 'text')
+        new_id = add_finding(self.path, 'other text')
+        with self.assertRaisesRegex(ValueError, 'requires status=superseded'):
+            update_finding_status(self.path, old_id, 'disproven', superseded_by_finding_id=new_id)
+
+    def test_superseded_by_rejects_nonexistent_finding(self):
+        old_id = add_finding(self.path, 'text')
+        with self.assertRaisesRegex(ValueError, 'No finding with id 999'):
+            update_finding_status(self.path, old_id, 'superseded', superseded_by_finding_id=999)
+
+    def test_superseded_by_rejects_self_reference(self):
+        finding_id = add_finding(self.path, 'text')
+        with self.assertRaisesRegex(ValueError, 'cannot supersede itself'):
+            update_finding_status(self.path, finding_id, 'superseded', superseded_by_finding_id=finding_id)
+
+    def test_superseded_by_cleared_when_status_moves_away_from_superseded(self):
+        old_id = add_finding(self.path, 'text')
+        new_id = add_finding(self.path, 'other text')
+        update_finding_status(self.path, old_id, 'superseded', superseded_by_finding_id=new_id)
+        update_finding_status(self.path, old_id, 'active')
+        row = self.connection.execute(
+            'SELECT status, superseded_by_finding_id FROM findings WHERE id = ?', (old_id,)).fetchone()
+        self.assertEqual(row['status'], 'active')
+        self.assertIsNone(row['superseded_by_finding_id'])
+
+    def test_cli_update_status_with_superseded_by(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(['--database', str(self.path), 'add', '--finding', 'Old claim']), 0)
+            self.assertEqual(main(['--database', str(self.path), 'add', '--finding', 'New claim']), 0)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(['--database', str(self.path), 'update-status', '1', 'superseded',
+                                    '--superseded-by', '2']), 0)
+        self.assertIn('set to superseded (superseded by 2)', output.getvalue())
 
     def test_cli_add_list_and_update_status(self):
         self.entity()

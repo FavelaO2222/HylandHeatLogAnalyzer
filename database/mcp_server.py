@@ -81,11 +81,17 @@ def list_findings(status: str | None = None) -> str:
 
 
 @mcp.tool()
-def update_finding_status(finding_id: int, status: str) -> str:
-    """Move a finding through its active/superseded/disproven lifecycle. Finding text is never edited in place."""
+def update_finding_status(finding_id: int, status: str, superseded_by_finding_id: int | None = None) -> str:
+    """Move a finding through its active/superseded/disproven lifecycle. Finding text is never edited in place.
+
+    superseded_by_finding_id optionally records which finding replaced this one; only valid
+    together with status='superseded'. The "why" belongs in the replacing finding's own text.
+    """
     def action():
-        record_finding.update_finding_status(_db(), finding_id, status)
-        return f'Finding {finding_id} set to {status}.'
+        record_finding.update_finding_status(
+            _db(), finding_id, status, superseded_by_finding_id=superseded_by_finding_id)
+        suffix = f' (superseded by {superseded_by_finding_id})' if superseded_by_finding_id else ''
+        return f'Finding {finding_id} set to {status}{suffix}.'
     return _safely(action)
 
 

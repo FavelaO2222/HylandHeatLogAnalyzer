@@ -8,8 +8,8 @@ from typing import Optional, Union
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = Path(__file__).resolve().with_name('schema.sql')
-SCHEMA_VERSION = 5
-SUPPORTED_VERSIONS = (1, 2, 3, 4, 5)
+SCHEMA_VERSION = 6
+SUPPORTED_VERSIONS = (1, 2, 3, 4, 5, 6)
 DatabasePath = Optional[Union[str, Path]]
 
 
@@ -96,10 +96,11 @@ def initialize_database(database: DatabasePath = None) -> Path:
     version -- v1 -> v2 added evidence_links; v1/v2 -> v3 added the events_fts/
     errors_fts search index; v1/v2/v3 -> v4 added source_documents and its own
     FTS5 index; v1..v4 -> v5 adds source_documents.collection/content_sha256
-    (via _ensure_column, since CREATE TABLE IF NOT EXISTS is a no-op against
-    the existing v4 table) plus the experiments/experiment_symbols tables (see
-    schema.sql). Read-only operations and existing writers never migrate
-    implicitly.
+    (via _pending_column_additions, since CREATE TABLE IF NOT EXISTS is a
+    no-op against the existing v4 table) plus the experiments/
+    experiment_symbols tables; v1..v5 -> v6 adds findings.superseded_by_finding_id
+    the same way (see schema.sql). Read-only operations and existing writers
+    never migrate implicitly.
     """
     path = resolve_database_path(database)
     schema = SCHEMA_PATH.read_text(encoding='utf-8')
@@ -111,8 +112,14 @@ def initialize_database(database: DatabasePath = None) -> Path:
             # (not run afterward) so it lands before schema.sql's own statements
             # that assume these columns already exist (e.g. an index on one), and
             # so it shares that transaction rather than being separately committed.
-            alterations = _pending_column_additions(
-                connection, 'source_documents', {'collection': 'TEXT', 'content_sha256': 'TEXT'})
+            alterations = (
+                _pending_column_additions(
+                    connection, 'source_documents', {'collection': 'TEXT', 'content_sha256': 'TEXT'})
+                + _pending_column_additions(
+                    connection, 'findings', {'superseded_by_finding_id':
+                        "INTEGER REFERENCES findings(id) ON DELETE RESTRICT "
+                        "CHECK (superseded_by_finding_id IS NULL OR superseded_by_finding_id <> id) "
+                        "CHECK (superseded_by_finding_id IS NULL OR status = 'superseded')"}))
             # executescript commits any pending transaction before starting, so
             # BEGIN belongs in the script. DDL and version insertion roll back together.
             connection.executescript('BEGIN IMMEDIATE;\n' + alterations + schema)

@@ -49,31 +49,42 @@ def add_finding(database, finding, *, confidence='unknown', subject_entity_id=No
 
 def list_findings(database, status=None):
     with closing(connect_database(database, read_only=True)) as connection:
-        validate_schema_version(connection)
+        validate_schema_version(connection, minimum=6)
         clause, params = ('WHERE f.status = ?', (status,)) if status else ('', ())
         return connection.execute(f'''
             SELECT f.id, f.finding, f.confidence, f.status, f.subject_text, e.name AS subject_entity_name,
-                   f.test_run_id, f.source_artifact_id, f.source_line
+                   f.test_run_id, f.source_artifact_id, f.source_line, f.superseded_by_finding_id
             FROM findings f LEFT JOIN entities e ON e.id = f.subject_entity_id
             {clause} ORDER BY f.id''', params).fetchall()
 
 
-def update_finding_status(database, finding_id, status):
+def update_finding_status(database, finding_id, status, *, superseded_by_finding_id=None):
     if status not in STATUSES:
         raise ValueError(f'status must be one of {STATUSES}.')
+    if superseded_by_finding_id is not None and status != 'superseded':
+        raise ValueError('--superseded-by requires status=superseded.')
+    if superseded_by_finding_id == finding_id:
+        raise ValueError('A finding cannot supersede itself.')
     with closing(connect_database(database)) as connection:
-        validate_schema_version(connection)
+        validate_schema_version(connection, minimum=6)
         with connection:
+            require_row(connection, 'findings', superseded_by_finding_id, 'finding')
+            # Clearing back to NULL when status leaves 'superseded' keeps the
+            # column consistent with its own CHECK constraint on every update,
+            # not just ones that set it.
+            value = superseded_by_finding_id if status == 'superseded' else None
             cursor = connection.execute(
-                "UPDATE findings SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
-                (status, finding_id))
+                '''UPDATE findings SET status = ?, superseded_by_finding_id = ?,
+                   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?''',
+                (status, value, finding_id))
             if cursor.rowcount == 0:
                 raise ValueError(f'No finding with id {finding_id}.')
 
 
 def format_finding_row(row):
     subject = row['subject_entity_name'] or row['subject_text'] or '-'
-    return f"[{row['id']}] ({row['status']}, {row['confidence']}) {subject}: {row['finding']}"
+    superseded_by = f" (superseded by #{row['superseded_by_finding_id']})" if row['superseded_by_finding_id'] else ''
+    return f"[{row['id']}] ({row['status']}, {row['confidence']}) {subject}: {row['finding']}{superseded_by}"
 
 
 def main(argv=None):
@@ -98,6 +109,8 @@ def main(argv=None):
     status_cmd = commands.add_parser('update-status', help="Change an existing finding's status.")
     status_cmd.add_argument('finding_id', type=int)
     status_cmd.add_argument('status', choices=STATUSES)
+    status_cmd.add_argument('--superseded-by', type=int, dest='superseded_by_finding_id',
+                             help='Id of the finding that replaces this one; requires status=superseded.')
 
     args = parser.parse_args(argv)
     try:
@@ -112,8 +125,10 @@ def main(argv=None):
             rows = list_findings(args.database, args.status)
             print('\n'.join(format_finding_row(row) for row in rows) if rows else 'No findings recorded.')
         else:
-            update_finding_status(args.database, args.finding_id, args.status)
-            print(f'Finding {args.finding_id} set to {args.status}.')
+            update_finding_status(args.database, args.finding_id, args.status,
+                                   superseded_by_finding_id=args.superseded_by_finding_id)
+            suffix = f' (superseded by {args.superseded_by_finding_id})' if args.superseded_by_finding_id else ''
+            print(f'Finding {args.finding_id} set to {args.status}{suffix}.')
     except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
         print(f'Error: {exc}', file=sys.stderr)
         return 2

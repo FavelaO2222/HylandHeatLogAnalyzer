@@ -28,6 +28,9 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(after.pop('source_documents'), [])
             self.assertEqual(after.pop('experiments'), [])
             self.assertEqual(after.pop('experiment_symbols'), [])
+            # findings gained a trailing superseded_by_finding_id column in v6;
+            # every legacy row keeps its values with that new column NULL.
+            self.assertEqual([row + (None,) for row in before.pop('findings')], after.pop('findings'))
             self.assertEqual(before, after)
             self.assertEqual(db.validate_schema_version(connection), db.SCHEMA_VERSION)
             self.assertEqual(created, connection.execute('SELECT created_at FROM schema_metadata').fetchone()[0])

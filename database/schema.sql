@@ -1,4 +1,4 @@
--- Authoritative fresh-database schema v5. db.initialize_database migrates v1-v4 explicitly.
+-- Authoritative fresh-database schema v6. db.initialize_database migrates v1-v5 explicitly.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 5);
+INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 6);
 
 -- Raw evidence references. created_at is the optional original artifact time.
 CREATE TABLE IF NOT EXISTS source_artifacts (
@@ -187,6 +187,12 @@ CREATE INDEX IF NOT EXISTS idx_entities_type_name ON entities (entity_type, name
 CREATE INDEX IF NOT EXISTS idx_entities_canonical_name ON entities (canonical_name);
 
 -- Research conclusions remain distinct from structured runtime evidence.
+-- Schema v6: superseded_by_finding_id records *which* finding replaced a
+-- superseded one, not just that it was replaced -- record_finding.py
+-- update-status sets it via --superseded-by. Only meaningful alongside
+-- status='superseded' (enforced by CHECK); the "why" stays in the
+-- replacing finding's own text, matching how every other finding already
+-- explains itself.
 CREATE TABLE IF NOT EXISTS findings (
     id INTEGER PRIMARY KEY,
     subject_entity_id INTEGER REFERENCES entities(id) ON DELETE RESTRICT,
@@ -198,13 +204,14 @@ CREATE TABLE IF NOT EXISTS findings (
     test_run_id INTEGER REFERENCES test_runs(id) ON DELETE RESTRICT,
     source_line INTEGER CHECK (source_line IS NULL OR (typeof(source_line) = 'integer' AND source_line > 0)),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), superseded_by_finding_id INTEGER REFERENCES findings(id) ON DELETE RESTRICT CHECK (superseded_by_finding_id IS NULL OR superseded_by_finding_id <> id) CHECK (superseded_by_finding_id IS NULL OR status = 'superseded'),
     CHECK (source_line IS NULL OR source_artifact_id IS NOT NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_findings_subject ON findings (subject_entity_id);
 CREATE INDEX IF NOT EXISTS idx_findings_artifact_line ON findings (source_artifact_id, source_line);
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings (test_run_id);
 CREATE INDEX IF NOT EXISTS idx_findings_status_confidence ON findings (status, confidence);
+CREATE INDEX IF NOT EXISTS idx_findings_superseded_by ON findings (superseded_by_finding_id);
 
 CREATE TABLE IF NOT EXISTS unknowns (
     id INTEGER PRIMARY KEY,

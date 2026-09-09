@@ -16,13 +16,16 @@ against an imported test run, and `database.ingest_source` (see
 [Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion)) makes its
 own source, and the game's decompiled assemblies, full-text searchable too.
 
-Current milestone: **Phase 4D — reliable cross-artifact evidence retrieval**
-(idempotent ingestion, provenance, the `research` symbol/question command,
-recorded experiments), using database schema v5. See
-[Phase 4D](#phase-4d-reliable-cross-artifact-evidence-retrieval) for the
-`research` command and its examples, [Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion)
-for what gets ingested and why, and [Phase 4B](#phase-4b-full-text-search-fts5)
-for the full-text search mechanics all three phases share.
+Current milestone: **Phase 4E — finding supersession** (schema v6), on top
+of **Phase 4D — reliable cross-artifact evidence retrieval** (idempotent
+ingestion, provenance, the `research` symbol/question command, recorded
+experiments). See
+[Phase 4E](#phase-4e-finding-supersession-schema-v6) for recording which
+finding replaced another, [Phase 4D](#phase-4d-reliable-cross-artifact-evidence-retrieval)
+for the `research` command and its examples,
+[Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion) for what
+gets ingested and why, and [Phase 4B](#phase-4b-full-text-search-fts5) for
+the full-text search mechanics all three phases share.
 Structured and deterministic retrieval first. Semantic retrieval only where
 exact retrieval eventually proves insufficient.
 
@@ -1583,6 +1586,42 @@ occasionally surface a less useful term than a person would pick by hand.
 
 **Structured and deterministic retrieval first. Semantic retrieval only where
 exact retrieval eventually proves insufficient.**
+
+## Phase 4E: Finding Supersession (schema v6)
+
+`findings.status` could already move to `superseded`, but nothing recorded
+*which* finding replaced it or why — that gap is how finding #5 and a
+Hjarni note ended up silently disagreeing about OfficerLee2's activation
+(see [System boundaries](#system-boundaries-this-database-vs-hjarni) below).
+Schema v6 adds one nullable, self-referencing column:
+`findings.superseded_by_finding_id INTEGER REFERENCES findings(id)`, with
+two CHECKs — it can't point at its own row, and it's only ever non-NULL
+when `status = 'superseded'` (set and cleared automatically by
+`update_finding_status`, so reactivating a finding drops the stale
+reference rather than leaving it inconsistent). The "why" still isn't a
+separate structured field: it belongs in the replacing finding's own text,
+exactly like every other finding already explains itself — this is a
+minimal, additive fix for the specific "which" gap, not a redesign.
+
+```bash
+# Record the new finding first, then point the old one at it:
+python3 -m database.record_finding --database data/hylandheat.db add \
+    --finding "Corrected: ..." --subject-entity-id 2
+# -> Recorded finding 7.
+python3 -m database.record_finding --database data/hylandheat.db \
+    update-status 5 superseded --superseded-by 7
+# -> Finding 5 set to superseded (superseded by 7).
+python3 -m database.record_finding --database data/hylandheat.db list
+# [5] (superseded, strong) OfficerLee2: ... (superseded by #7)
+```
+
+`--superseded-by` is optional on `update-status` — a finding can still be
+marked `superseded` (or `disproven`) without naming a specific successor,
+e.g. when it's simply withdrawn rather than replaced by one clean
+follow-up. The `research` command's "related evidence/research records"
+section doesn't yet surface this link explicitly (it still lists both rows
+independently via its bounded `LIKE` scan); following the reference from a
+listed finding to its replacement is still a manual step.
 
 ## System boundaries: this database vs. Hjarni
 

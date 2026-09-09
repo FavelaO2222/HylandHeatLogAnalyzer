@@ -108,6 +108,13 @@ class McpServerToolTests(unittest.TestCase):
     def test_update_finding_status_error(self):
         self.assertEqual(update_finding_status(999, 'superseded'), 'Error: No finding with id 999.')
 
+    def test_update_finding_status_records_superseded_by(self):
+        add_finding('old text')
+        add_finding('new text')
+        self.assertEqual(update_finding_status(1, 'superseded', superseded_by_finding_id=2),
+                          'Finding 1 set to superseded (superseded by 2).')
+        self.assertIn('(superseded by #2)', list_findings())
+
     def test_add_and_list_unknowns(self):
         self.assertEqual(add_unknown('A minimal question'), 'Recorded unknown 1.')
         self.assertIn('A minimal question', list_unknowns())
