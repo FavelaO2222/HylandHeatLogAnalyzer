@@ -312,6 +312,22 @@ class BackupRestoreTests(unittest.TestCase):
         with closing(db.connect_database(restored_path)) as restored:
             self.assertEqual(restored.execute('SELECT count(*) FROM agent_usage').fetchone()[0], 1)
 
+    def test_dump_includes_file_index(self):
+        # file_index rows are paths/names/sizes/line counts -- structural
+        # metadata about a codebase, never its actual source text --
+        # included in the public dump like agent_usage/experiments.
+        from database.file_index import ingest_scan
+        self.open_database()
+        ingest_scan(self.path, 'proj', {'root': '/tmp/proj', 'files': [
+            {'path': 'a.py', 'bytes': 10, 'lines': 2, 'extension': '.py', 'truncated': False}]})
+        dump_database(self.path, self.backup_path)
+        text = self.backup_path.read_text(encoding='utf-8')
+        self.assertIn('a.py', text)
+        restored_path = Path(self.temp.name) / 'restored.db'
+        restore_database(restored_path, self.backup_path)
+        with closing(db.connect_database(restored_path)) as restored:
+            self.assertEqual(restored.execute('SELECT count(*) FROM file_index').fetchone()[0], 1)
+
     def test_v1_restore_stays_v1_with_no_search_index(self):
         # A v1 backup restores as v1, with no FTS5 index -- restore never
         # migrates a database implicitly, and a v1 database has no search

@@ -3159,6 +3159,128 @@ CREATE TABLE experiments (
 );
 INSERT INTO "experiments" VALUES(1,'What code and runtime evidence explains when a Hyland officer clone changes ActiveSelf during NPC.EnterBuilding, and does it relate to the NPC.GetAndValidateReferences throw hypothesis for OfficerLee2 (unknown #2)?','Test run 3 (mod_build=0a7651c, general profile, 776 events, 22 errors, NEEDS_ATTENTION) shows OfficerLee2 completing NPC.EnterBuilding cleanly (ActiveSelf stayed True throughout, IsInBuilding False->True). ~45ms later CLONE ROOT SETACTIVE fires with RequestedActive=False, driving ActiveSelf True->False on the same clone. The new CloneRootSetActivePatch Harmony prefix captured a stack trace at this first deactivation (Instance=-376250), but it only shows System.Environment.get_StackTrace() -> CloneRootSetActivePatch.Prefix -> DMD<GameObject::SetActive> -> the native il2cpp trampoline -- it terminates at the IL2CPP managed/native boundary and does not reveal the actual game-code caller. This stack-capture approach cannot answer the question as designed. Separately, and directly relevant to unknown #2: this run''s 22 errors contain ZERO occurrences of NPC.GetAndValidateReferences -- the specific throw named in the hypothesis (a vs b) did not reproduce at all in this run, so neither hypothesis was tested. All 22 errors are instead unrelated NullReferenceException in ScheduleOne.NPCs.NPC.get_ID() called from Geraldine.Awake(), occurring during CartelGoon.NPC.Awake for 5 goon instances (1277312/14/16/18/20). The mod''s own GOON LIFECYCLE logging shows this is already captured (CaptureError=...) and self-heals -- the After= snapshot shows each goon fully initialized (NPCID=cartelgoon, HealthAlive=True) moments later. This is a distinct, non-blocking, already-handled race in goon Awake ordering, not the OfficerLee2 GetAndValidateReferences blocker.',6,3,'0a7651c-dirty','2026-09-09T01:59:30.118Z');
 INSERT INTO "experiments" VALUES(2,'What code and runtime evidence explains when a Hyland officer clone changes ActiveSelf during NPC.EnterBuilding? (follow-up to experiment #1, whose GameObject.SetActive-level stack trace terminated at the IL2CPP native boundary and could not identify the actual caller.)','Test run 4 (mod_build=fd59a48-dirty, general profile, 860 events, 23 errors, NEEDS_ATTENTION) used new FishNet-level instrumentation (NetworkObjectTryStartDeactivationPatch on NetworkObject.TryStartDeactivation, added this build) to trace past the earlier IL2CPP boundary. Result: OfficerLee2 completes the local (non-RPC) EnterBuilding overload cleanly (event #1334/#1336, ActiveSelf stays True), passes one PoliceStation.Update tick with no change (#1345/#1346), then ~4ms later NetworkObject.TryStartDeactivation is called on it directly: event #1347 (BEFORE) shows ActiveSelf=True, ActiveHierarchy=True, IsSpawned=False, ServerInitialized=False, ClientInitialized=False; event #1351 (AFTER, 1ms later) shows ActiveSelf=False, ActiveHierarchy=False. This directly identifies FishNet''s own NetworkObject.TryStartDeactivation as the caller that deactivates the clone root -- not arbitrary game code, and not reachable from the earlier GameObject.SetActive-level Harmony prefix because the call originates inside FishNet''s native-adjacent lifecycle handling, past where the IL2CPP-truncated stack trace could see. Separately, this build''s own automated-testing changes (AutomaticSaveCreator native save create/overwrite, TestSessionManager auto-quit) were also verified working end-to-end in this same session via TestResults/20260909T143458Z-2688/events.jsonl: save_create_requested -> save_create_slot_selected (SlotIndex=4, overwrite=True) -> save_create_overwrite_confirmed -> save_create_started -> character_creation_completed (t+78s) -> test_session_auto_quit (t+125s), with an empty errors.jsonl for the whole session.',7,4,'fd59a48-dirty','2026-09-09T14:43:59.442Z');
+CREATE TABLE file_index (
+    id INTEGER PRIMARY KEY,
+    collection TEXT NOT NULL CHECK (length(trim(collection)) > 0),
+    path TEXT NOT NULL CHECK (length(trim(path)) > 0),
+    parent_path TEXT,
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    is_directory INTEGER NOT NULL CHECK (is_directory IN (0, 1)),
+    extension TEXT,
+    bytes INTEGER CHECK (bytes IS NULL OR bytes >= 0),
+    lines INTEGER CHECK (lines IS NULL OR lines >= 0),
+    scanned_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (collection, path)
+);
+INSERT INTO "file_index" VALUES(1,'hylandheat-mod-source','Docs',NULL,'Docs',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(2,'hylandheat-mod-source','Docs/Research','Docs','Research',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(3,'hylandheat-mod-source','HylandHeat',NULL,'HylandHeat',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(4,'hylandheat-mod-source','HylandHeat/Areas','HylandHeat','Areas',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(5,'hylandheat-mod-source','HylandHeat/Crime','HylandHeat','Crime',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(6,'hylandheat-mod-source','HylandHeat/CustomRoutes','HylandHeat','CustomRoutes',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(7,'hylandheat-mod-source','HylandHeat/Debug','HylandHeat','Debug',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(8,'hylandheat-mod-source','HylandHeat/Docs','HylandHeat','Docs',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(9,'hylandheat-mod-source','HylandHeat/Docs/Research','HylandHeat/Docs','Research',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(10,'hylandheat-mod-source','HylandHeat/Infamy','HylandHeat','Infamy',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(11,'hylandheat-mod-source','HylandHeat/Police','HylandHeat','Police',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(12,'hylandheat-mod-source','HylandHeat/SWAT','HylandHeat','SWAT',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(13,'hylandheat-mod-source','HylandHeat/Sales','HylandHeat','Sales',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(14,'hylandheat-mod-source','HylandHeat/Suspicion','HylandHeat','Suspicion',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(15,'hylandheat-mod-source','HylandHeat/Testing','HylandHeat','Testing',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(16,'hylandheat-mod-source','HylandHeat/UI','HylandHeat','UI',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(17,'hylandheat-mod-source','docs',NULL,'docs',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(18,'hylandheat-mod-source','experiments',NULL,'experiments',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(19,'hylandheat-mod-source','experiments/HylandHeat.NetworkProbe','experiments','HylandHeat.NetworkProbe',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(20,'hylandheat-mod-source','tests',NULL,'tests',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(21,'hylandheat-mod-source','tests/DiagnosticChecks','tests','DiagnosticChecks',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(22,'hylandheat-mod-source','tools',NULL,'tools',1,NULL,NULL,NULL,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(23,'hylandheat-mod-source','.gitignore',NULL,'.gitignore',0,'(none)',54,7,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(24,'hylandheat-mod-source','Docs/ConfirmedRuntime.txt','Docs','ConfirmedRuntime.txt',0,'.txt',103,1,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(25,'hylandheat-mod-source','Docs/HYLAND_HEAT_SWAT_IMPLEMENTATION_ROADMAP.md','Docs','HYLAND_HEAT_SWAT_IMPLEMENTATION_ROADMAP.md',0,'.md',35343,692,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(26,'hylandheat-mod-source','Docs/Research/GOON_SPAWN_OBSERVATION.md','Docs/Research','GOON_SPAWN_OBSERVATION.md',0,'.md',2994,28,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(27,'hylandheat-mod-source','Docs/Research/POLICE_STATION_OFFICER_POOL_MECHANICS.md','Docs/Research','POLICE_STATION_OFFICER_POOL_MECHANICS.md',0,'.md',5778,74,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(28,'hylandheat-mod-source','Docs/SWAT_API_FINDINGS.md','Docs','SWAT_API_FINDINGS.md',0,'.md',66770,354,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(29,'hylandheat-mod-source','HylandHeat.sln',NULL,'HylandHeat.sln',0,'.sln',1350,24,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(30,'hylandheat-mod-source','HylandHeat/AGENT.md','HylandHeat','AGENT.md',0,'.md',2102,65,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(31,'hylandheat-mod-source','HylandHeat/Areas/AreaTracker.cs','HylandHeat/Areas','AreaTracker.cs',0,'.cs',1312,61,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(32,'hylandheat-mod-source','HylandHeat/Crime/CrimeCatalog.cs','HylandHeat/Crime','CrimeCatalog.cs',0,'.cs',1465,57,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(33,'hylandheat-mod-source','HylandHeat/Crime/CrimeTracker.cs','HylandHeat/Crime','CrimeTracker.cs',0,'.cs',927,44,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(34,'hylandheat-mod-source','HylandHeat/Crime/PursuitTracker.cs','HylandHeat/Crime','PursuitTracker.cs',0,'.cs',4580,189,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(35,'hylandheat-mod-source','HylandHeat/CustomRoutes/CustomPatrolRouteFactory.cs','HylandHeat/CustomRoutes','CustomPatrolRouteFactory.cs',0,'.cs',1266,54,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(36,'hylandheat-mod-source','HylandHeat/CustomRoutes/PatrolRouteDefinition.cs','HylandHeat/CustomRoutes','PatrolRouteDefinition.cs',0,'.cs',317,18,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(37,'hylandheat-mod-source','HylandHeat/CustomRoutes/RegionalPatrolManager.cs','HylandHeat/CustomRoutes','RegionalPatrolManager.cs',0,'.cs',4653,187,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(38,'hylandheat-mod-source','HylandHeat/CustomRoutes/RegionalPatrolRoutes.cs','HylandHeat/CustomRoutes','RegionalPatrolRoutes.cs',0,'.cs',5778,159,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(39,'hylandheat-mod-source','HylandHeat/CustomRoutes/RegionalPatrolSpawner.cs','HylandHeat/CustomRoutes','RegionalPatrolSpawner.cs',0,'.cs',895,35,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(40,'hylandheat-mod-source','HylandHeat/Debug/DiagnosticSessionLog.cs','HylandHeat/Debug','DiagnosticSessionLog.cs',0,'.cs',5566,130,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(41,'hylandheat-mod-source','HylandHeat/Debug/GoonLifecycleLaunchDebug.cs','HylandHeat/Debug','GoonLifecycleLaunchDebug.cs',0,'.cs',17715,407,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(42,'hylandheat-mod-source','HylandHeat/Debug/GoonSpawnObservationDebug.cs','HylandHeat/Debug','GoonSpawnObservationDebug.cs',0,'.cs',8771,161,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(43,'hylandheat-mod-source','HylandHeat/Debug/GoonTransitionTracker.cs','HylandHeat/Debug','GoonTransitionTracker.cs',0,'.cs',4247,74,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(44,'hylandheat-mod-source','HylandHeat/Debug/OfficerCloneDebug.cs','HylandHeat/Debug','OfficerCloneDebug.cs',0,'.cs',54750,1785,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(45,'hylandheat-mod-source','HylandHeat/Debug/PoliceActivationDebugPatch.cs','HylandHeat/Debug','PoliceActivationDebugPatch.cs',0,'.cs',14846,495,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(46,'hylandheat-mod-source','HylandHeat/Debug/PoliceCheckpointDebug.cs','HylandHeat/Debug','PoliceCheckpointDebug.cs',0,'.cs',1860,58,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(47,'hylandheat-mod-source','HylandHeat/Debug/PolicePoolRosterDebug.cs','HylandHeat/Debug','PolicePoolRosterDebug.cs',0,'.cs',4101,150,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(48,'hylandheat-mod-source','HylandHeat/Debug/PoliceReviveDebugPatch.cs','HylandHeat/Debug','PoliceReviveDebugPatch.cs',0,'.cs',3455,130,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(49,'hylandheat-mod-source','HylandHeat/Debug/RoutePointRecorder.cs','HylandHeat/Debug','RoutePointRecorder.cs',0,'.cs',3334,154,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(50,'hylandheat-mod-source','HylandHeat/Debug/oliceStationPoolDebugPatch.cs','HylandHeat/Debug','oliceStationPoolDebugPatch.cs',0,'.cs',3702,143,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(51,'hylandheat-mod-source','HylandHeat/Docs/CODEX_9_HOUR_HYLAND_HEAT_RESEARCH_QUEUE.md','HylandHeat/Docs','CODEX_9_HOUR_HYLAND_HEAT_RESEARCH_QUEUE.md',0,'.md',15887,644,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(52,'hylandheat-mod-source','HylandHeat/Docs/CODEX_OVERNIGHT_HYLAND_HEAT_RESEARCH_QUEUE_2.md','HylandHeat/Docs','CODEX_OVERNIGHT_HYLAND_HEAT_RESEARCH_QUEUE_2.md',0,'.md',14133,437,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(53,'hylandheat-mod-source','HylandHeat/Docs/HYLAND_HEAT_POLICE_CLONE_RESEARCH_UPDATE1.md','HylandHeat/Docs','HYLAND_HEAT_POLICE_CLONE_RESEARCH_UPDATE1.md',0,'.md',5041,175,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(54,'hylandheat-mod-source','HylandHeat/Docs/Hyland_Heat_Roadmap.md','HylandHeat/Docs','Hyland_Heat_Roadmap.md',0,'.md',13687,548,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(55,'hylandheat-mod-source','HylandHeat/Docs/Research/OFFICERLEE_HIERARCHY_LIFECYCLE.md','HylandHeat/Docs/Research','OFFICERLEE_HIERARCHY_LIFECYCLE.md',0,'.md',4119,47,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(56,'hylandheat-mod-source','HylandHeat/Docs/Research/OFFICER_CLONE_ACTIVATION_ORDER.md','HylandHeat/Docs/Research','OFFICER_CLONE_ACTIVATION_ORDER.md',0,'.md',3555,38,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(57,'hylandheat-mod-source','HylandHeat/Docs/Research/OFFICER_CLONE_AWAKE_INSTRUMENTATION.md','HylandHeat/Docs/Research','OFFICER_CLONE_AWAKE_INSTRUMENTATION.md',0,'.md',4745,88,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(58,'hylandheat-mod-source','HylandHeat/Docs/Research/OFFICER_CLONE_BLOCKER_SUMMARY_2.md','HylandHeat/Docs/Research','OFFICER_CLONE_BLOCKER_SUMMARY_2.md',0,'.md',7609,72,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(59,'hylandheat-mod-source','HylandHeat/Docs/Research/OFFICER_CLONE_DATA_ACTIVATION_AUDIT.md','HylandHeat/Docs/Research','OFFICER_CLONE_DATA_ACTIVATION_AUDIT.md',0,'.md',4085,42,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(60,'hylandheat-mod-source','HylandHeat/Docs/Research/OFFICER_CLONE_FISHNET_REGISTRATION_DEEP_DIVE.md','HylandHeat/Docs/Research','OFFICER_CLONE_FISHNET_REGISTRATION_DEEP_DIVE.md',0,'.md',6043,80,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(61,'hylandheat-mod-source','HylandHeat/Docs/Research/OFFICER_CLONE_GETANDVALIDATE_REAUDIT.md','HylandHeat/Docs/Research','OFFICER_CLONE_GETANDVALIDATE_REAUDIT.md',0,'.md',6944,80,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(62,'hylandheat-mod-source','HylandHeat/Docs/Research/OFFICER_CLONE_INITIALIZATION_FALLBACKS.md','HylandHeat/Docs/Research','OFFICER_CLONE_INITIALIZATION_FALLBACKS.md',0,'.md',3180,30,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(63,'hylandheat-mod-source','HylandHeat/Docs/Research/OFFICER_CLONE_TEMPLATE_STATE.md','HylandHeat/Docs/Research','OFFICER_CLONE_TEMPLATE_STATE.md',0,'.md',3597,38,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(64,'hylandheat-mod-source','HylandHeat/HylandHeat.csproj','HylandHeat','HylandHeat.csproj',0,'.csproj',2883,80,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(65,'hylandheat-mod-source','HylandHeat/Infamy/InfamyManager.cs','HylandHeat/Infamy','InfamyManager.cs',0,'.cs',1609,76,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(66,'hylandheat-mod-source','HylandHeat/MainMod.cs','HylandHeat','MainMod.cs',0,'.cs',5761,182,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(67,'hylandheat-mod-source','HylandHeat/Police/CustomPatrolRouteTest.cs','HylandHeat/Police','CustomPatrolRouteTest.cs',0,'.cs',7108,289,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(68,'hylandheat-mod-source','HylandHeat/Police/FootPatrolSpawnPatch.cs','HylandHeat/Police','FootPatrolSpawnPatch.cs',0,'.cs',1890,76,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(69,'hylandheat-mod-source','HylandHeat/Police/LawActivityTracker.cs','HylandHeat/Police','LawActivityTracker.cs',0,'.cs',5494,201,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(70,'hylandheat-mod-source','HylandHeat/Police/PatrolEvalutationPatch.cs','HylandHeat/Police','PatrolEvalutationPatch.cs',0,'.cs',2176,83,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(71,'hylandheat-mod-source','HylandHeat/Police/PoliceDifficultyManager.cs','HylandHeat/Police','PoliceDifficultyManager.cs',0,'.cs',781,35,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(72,'hylandheat-mod-source','HylandHeat/Police/PoliceResponseManager.cs','HylandHeat/Police','PoliceResponseManager.cs',0,'.cs',1639,77,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(73,'hylandheat-mod-source','HylandHeat/SWAT/SwatConfig.cs','HylandHeat/SWAT','SwatConfig.cs',0,'.cs',847,22,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(74,'hylandheat-mod-source','HylandHeat/SWAT/SwatDebugCommands.cs','HylandHeat/SWAT','SwatDebugCommands.cs',0,'.cs',4727,135,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(75,'hylandheat-mod-source','HylandHeat/SWAT/SwatDiagnostics.cs','HylandHeat/SWAT','SwatDiagnostics.cs',0,'.cs',9888,179,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(76,'hylandheat-mod-source','HylandHeat/SWAT/SwatIsolationPatch.cs','HylandHeat/SWAT','SwatIsolationPatch.cs',0,'.cs',2178,46,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(77,'hylandheat-mod-source','HylandHeat/SWAT/SwatUnit.cs','HylandHeat/SWAT','SwatUnit.cs',0,'.cs',6579,145,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(78,'hylandheat-mod-source','HylandHeat/SWAT/SwatUnitFactory.cs','HylandHeat/SWAT','SwatUnitFactory.cs',0,'.cs',732,16,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(79,'hylandheat-mod-source','HylandHeat/Sales/SaleTracker.cs','HylandHeat/Sales','SaleTracker.cs',0,'.cs',1499,57,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(80,'hylandheat-mod-source','HylandHeat/Suspicion/SuspicionManager.cs','HylandHeat/Suspicion','SuspicionManager.cs',0,'.cs',774,36,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(81,'hylandheat-mod-source','HylandHeat/Testing/AutomatedTestSession.cs','HylandHeat/Testing','AutomatedTestSession.cs',0,'.cs',8458,274,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(82,'hylandheat-mod-source','HylandHeat/Testing/AutomaticSaveCreator.cs','HylandHeat/Testing','AutomaticSaveCreator.cs',0,'.cs',8272,264,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(83,'hylandheat-mod-source','HylandHeat/Testing/AutomaticSaveLoader.cs','HylandHeat/Testing','AutomaticSaveLoader.cs',0,'.cs',3282,106,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(84,'hylandheat-mod-source','HylandHeat/Testing/GameStateSnapshot.cs','HylandHeat/Testing','GameStateSnapshot.cs',0,'.cs',898,25,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(85,'hylandheat-mod-source','HylandHeat/Testing/SessionSummary.cs','HylandHeat/Testing','SessionSummary.cs',0,'.cs',150,6,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(86,'hylandheat-mod-source','HylandHeat/Testing/TelemetryLogger.cs','HylandHeat/Testing','TelemetryLogger.cs',0,'.cs',2103,72,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(87,'hylandheat-mod-source','HylandHeat/Testing/TestSessionConfig.cs','HylandHeat/Testing','TestSessionConfig.cs',0,'.cs',5668,163,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(88,'hylandheat-mod-source','HylandHeat/Testing/TestSessionManager.cs','HylandHeat/Testing','TestSessionManager.cs',0,'.cs',5439,157,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(89,'hylandheat-mod-source','HylandHeat/UI/HeatHUD.cs','HylandHeat/UI','HeatHUD.cs',0,'.cs',2940,151,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(90,'hylandheat-mod-source','README.md',NULL,'README.md',0,'.md',2296,44,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(91,'hylandheat-mod-source','docs/LATEST_RESEARCH_SUMMARY.md','docs','LATEST_RESEARCH_SUMMARY.md',0,'.md',9784,128,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(92,'hylandheat-mod-source','docs/OFFICERLEE2_STATION_LIFECYCLE_BLOCKER_RESEARCH.md','docs','OFFICERLEE2_STATION_LIFECYCLE_BLOCKER_RESEARCH.md',0,'.md',28963,608,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(93,'hylandheat-mod-source','docs/POLICE_CLONE_INITIALIZATION_RESEARCH.md','docs','POLICE_CLONE_INITIALIZATION_RESEARCH.md',0,'.md',17633,170,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(94,'hylandheat-mod-source','docs/POLICE_CLONE_REFERENCE_FOLLOWUP.md','docs','POLICE_CLONE_REFERENCE_FOLLOWUP.md',0,'.md',8013,78,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(95,'hylandheat-mod-source','docs/POLICE_MANPOWER_RESEARCH.md','docs','POLICE_MANPOWER_RESEARCH.md',0,'.md',16215,205,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(96,'hylandheat-mod-source','experiments/HylandHeat.NetworkProbe/HylandHeat.NetworkProbe.csproj','experiments/HylandHeat.NetworkProbe','HylandHeat.NetworkProbe.csproj',0,'.csproj',1661,41,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(97,'hylandheat-mod-source','experiments/HylandHeat.NetworkProbe/NetworkProbeMod.cs','experiments/HylandHeat.NetworkProbe','NetworkProbeMod.cs',0,'.cs',11085,263,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(98,'hylandheat-mod-source','experiments/HylandHeat.NetworkProbe/README.md','experiments/HylandHeat.NetworkProbe','README.md',0,'.md',1775,38,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(99,'hylandheat-mod-source','experiments/HylandHeat.NetworkProbe/TAKEOVER.md','experiments/HylandHeat.NetworkProbe','TAKEOVER.md',0,'.md',3079,58,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(100,'hylandheat-mod-source','global.json',NULL,'global.json',0,'.json',105,7,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(101,'hylandheat-mod-source','tests/DiagnosticChecks/DiagnosticChecks.csproj','tests/DiagnosticChecks','DiagnosticChecks.csproj',0,'.csproj',453,7,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(102,'hylandheat-mod-source','tests/DiagnosticChecks/NuGet.Config','tests/DiagnosticChecks','NuGet.Config',0,'.Config',74,1,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(103,'hylandheat-mod-source','tests/DiagnosticChecks/Program.cs','tests/DiagnosticChecks','Program.cs',0,'.cs',5942,94,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(104,'hylandheat-mod-source','tests/DiagnosticChecks/Stubs.cs','tests/DiagnosticChecks','Stubs.cs',0,'.cs',1118,17,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(105,'hylandheat-mod-source','tools/analyze-after-game.md','tools','analyze-after-game.md',0,'.md',1647,32,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(106,'hylandheat-mod-source','tools/analyze-after-game.sh','tools','analyze-after-game.sh',0,'.sh',1843,42,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(107,'hylandheat-mod-source','tools/run-autotest.md','tools','run-autotest.md',0,'.md',7130,143,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(108,'hylandheat-mod-source','tools/run-autotest.sh','tools','run-autotest.sh',0,'.sh',1546,32,'2026-09-09T17:51:48.378Z');
+INSERT INTO "file_index" VALUES(109,'hylandheat-mod-source','tools/run-test-session.sh','tools','run-test-session.sh',0,'.sh',1667,42,'2026-09-09T17:51:48.378Z');
 CREATE TABLE findings (
     id INTEGER PRIMARY KEY,
     subject_entity_id INTEGER REFERENCES entities(id) ON DELETE RESTRICT,
@@ -3208,7 +3330,7 @@ CREATE TABLE schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT INTO "schema_metadata" VALUES(1,7,'2026-09-08T01:58:01.369Z','2026-09-09T15:32:00.408Z');
+INSERT INTO "schema_metadata" VALUES(1,8,'2026-09-08T01:58:01.369Z','2026-09-09T17:51:41.873Z');
 CREATE TABLE source_artifacts (
     id INTEGER PRIMARY KEY,
     artifact_type TEXT NOT NULL CHECK (artifact_type IN
@@ -3339,4 +3461,7 @@ CREATE INDEX idx_agent_usage_occurred_at ON agent_usage (occurred_at);
 CREATE INDEX idx_agent_usage_experiment ON agent_usage (experiment_id);
 CREATE INDEX idx_agent_usage_run ON agent_usage (test_run_id);
 CREATE INDEX idx_agent_usage_artifact ON agent_usage (source_artifact_id);
+CREATE INDEX idx_file_index_collection_parent ON file_index (collection, parent_path);
+CREATE INDEX idx_file_index_name ON file_index (name);
+CREATE INDEX idx_file_index_extension ON file_index (collection, extension);
 COMMIT;

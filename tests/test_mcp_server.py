@@ -24,6 +24,7 @@ from database.mcp_server import (
     search, rebuild_search_index,
     research, add_experiment, list_experiments,
     add_usage, list_usage, usage_summary, compare_usage_packet_vs_raw,
+    ingest_file_index, file_index_tree, file_index_find, file_index_context,
 )
 
 
@@ -285,6 +286,25 @@ class McpServerToolTests(unittest.TestCase):
         self.assertEqual(result['raw_tokens_estimate'], 0)
         self.assertIsNone(result['reduction_pct_estimate'])
 
+    def test_ingest_and_navigate_file_index(self):
+        project = Path(self.temp.name) / 'scanme'
+        (project / 'pkg').mkdir(parents=True)
+        (project / 'pkg' / 'a.py').write_text('x = 1\n', encoding='utf-8')
+        result = ingest_file_index(str(project), 'proj')
+        self.assertEqual(result['files'], 1)
+        tree = file_index_tree('proj')
+        self.assertEqual({item['path'] for item in tree['items']}, {'pkg', 'pkg/a.py'})
+        found = file_index_find('a.py', collection='proj')
+        self.assertEqual(found['items'][0]['path'], 'pkg/a.py')
+        context = file_index_context('proj', 'pkg/a.py')
+        self.assertEqual(context['node']['name'], 'a.py')
+        self.assertIsNone(context['source_document'])
+
+    def test_file_index_context_error_surfaces_real_message(self):
+        result = file_index_context('proj', 'missing')
+        self.assertIn('error', result)
+        self.assertIn("No path 'missing'", result['error'])
+
     def test_backup_database_error_surfaces_real_message(self):
         # configure() self-initializes a missing database, so it can't produce this error path;
         # plant a genuine foreign-key violation instead (bypassing connect_database's enforcement,
@@ -323,7 +343,8 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
                              'sync_entities', 'list_entities', 'build_context', 'build_entity_context',
                              'inspect_database', 'backup_database', 'attach_evidence', 'list_evidence', 'compare_runs',
                              'search', 'rebuild_search_index', 'research', 'add_experiment', 'list_experiments',
-                             'add_usage', 'list_usage', 'usage_summary', 'compare_usage_packet_vs_raw'):
+                             'add_usage', 'list_usage', 'usage_summary', 'compare_usage_packet_vs_raw',
+                             'ingest_file_index', 'file_index_tree', 'file_index_find', 'file_index_context'):
                 self.assertIn(expected, names)
 
             result = await client.call_tool('add_finding', {'finding': 'Protocol round trip works'})

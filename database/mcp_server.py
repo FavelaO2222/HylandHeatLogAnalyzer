@@ -17,8 +17,8 @@ import sqlite3
 
 from mcp.server.mcpserver import MCPServer
 
-from . import (backup, context_builder, entity_extraction, evidence, inspect_db, record_decision, record_experiment,
-               record_finding, record_relationship, record_unknown, record_usage, run_comparison)
+from . import (backup, context_builder, entity_extraction, evidence, file_index, inspect_db, record_decision,
+               record_experiment, record_finding, record_relationship, record_unknown, record_usage, run_comparison)
 from . import research as research_module
 from . import search as fts_search
 from . import usage_report
@@ -461,6 +461,56 @@ def compare_usage_packet_vs_raw(query: str, limit: int = 6) -> dict[str, object]
     """
     try:
         return usage_report.compare_packet_vs_raw(_db(), query, limit=limit)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool(structured_output=True)
+def ingest_file_index(project_root: str, collection: str) -> dict[str, object]:
+    """Scan `project_root` (project_scanner.scan_project(): built-in ignores
+    plus its own .gitignore) and (re)build file_index for `collection`,
+    replacing that collection's existing rows. Requires schema v8.
+
+    Use the same collection name database.ingest_source used for this root
+    (e.g. 'hylandheat-mod-source') so file_index_context can cross-reference
+    source_documents; a project_root outside any existing ingestion is fine
+    too -- file_index never requires source_documents to exist.
+    """
+    try:
+        return file_index.ingest_directory(_db(), collection, project_root)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool(structured_output=True)
+def file_index_tree(collection: str, path: str | None = None, limit: int = 50) -> dict[str, object]:
+    """Recursively list a file_index collection (or one subtree rooted at `path`).
+    Requires schema v8."""
+    try:
+        return file_index.tree(_db(), collection, path, limit=limit)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool(structured_output=True)
+def file_index_find(query: str, collection: str | None = None, extension: str | None = None,
+                    limit: int = 50) -> dict[str, object]:
+    """Search file_index names for `query` (substring, case-insensitive),
+    optionally scoped to one collection and/or extension. Requires schema v8."""
+    try:
+        return file_index.find(_db(), query, collection=collection, extension=extension, limit=limit)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool(structured_output=True)
+def file_index_context(collection: str, path: str) -> dict[str, object]:
+    """Structural context for one path -- parent, siblings, children -- plus
+    the matching source_documents row when one shares this exact
+    (collection, path), or an explicit null when none does. Requires schema v8.
+    """
+    try:
+        return file_index.context(_db(), collection, path)
     except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
         return {'error': str(exc)}
 

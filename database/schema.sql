@@ -1,4 +1,4 @@
--- Authoritative fresh-database schema v7. db.initialize_database migrates v1-v6 explicitly.
+-- Authoritative fresh-database schema v8. db.initialize_database migrates v1-v7 explicitly.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 7);
+INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 8);
 
 -- Raw evidence references. created_at is the optional original artifact time.
 CREATE TABLE IF NOT EXISTS source_artifacts (
@@ -349,3 +349,34 @@ CREATE INDEX IF NOT EXISTS idx_agent_usage_occurred_at ON agent_usage (occurred_
 CREATE INDEX IF NOT EXISTS idx_agent_usage_experiment ON agent_usage (experiment_id);
 CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage (test_run_id);
 CREATE INDEX IF NOT EXISTS idx_agent_usage_artifact ON agent_usage (source_artifact_id);
+
+-- Schema v8: a recursive, navigable file/directory index for a project
+-- root, ingested from project_scanner.scan_project() (see
+-- database.file_index). Deliberately decoupled from every other table --
+-- identified only by (collection, path) TEXT, never a foreign key into
+-- source_artifacts/source_documents/etc. -- so this table works standalone
+-- on a project with no other tables populated at all, and a soft path-
+-- string join against source_documents (when collection/path happen to
+-- match, e.g. the same mod repo ingested both ways) is opt-in, not
+-- required. parent_path is a plain adjacency-list pointer, not a nested-
+-- set/materialized-path scheme, so recursive descent uses SQLite's own
+-- WITH RECURSIVE rather than a bespoke tree format. Each ingest fully
+-- replaces its collection's rows in one transaction (delete then insert)
+-- rather than diffing -- this is a snapshot of what exists *now*, not a
+-- history to accumulate the way test_runs/experiments are.
+CREATE TABLE IF NOT EXISTS file_index (
+    id INTEGER PRIMARY KEY,
+    collection TEXT NOT NULL CHECK (length(trim(collection)) > 0),
+    path TEXT NOT NULL CHECK (length(trim(path)) > 0),
+    parent_path TEXT,
+    name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    is_directory INTEGER NOT NULL CHECK (is_directory IN (0, 1)),
+    extension TEXT,
+    bytes INTEGER CHECK (bytes IS NULL OR bytes >= 0),
+    lines INTEGER CHECK (lines IS NULL OR lines >= 0),
+    scanned_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (collection, path)
+);
+CREATE INDEX IF NOT EXISTS idx_file_index_collection_parent ON file_index (collection, parent_path);
+CREATE INDEX IF NOT EXISTS idx_file_index_name ON file_index (name);
+CREATE INDEX IF NOT EXISTS idx_file_index_extension ON file_index (collection, extension);

@@ -16,10 +16,13 @@ against an imported test run, and `database.ingest_source` (see
 [Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion)) makes its
 own source, and the game's decompiled assemblies, full-text searchable too.
 
-Current milestone: **Phase 5 — agent usage tracking** (schema v7), on top of
-**Phase 4E — finding supersession** (schema v6) and **Phase 4D — reliable
-cross-artifact evidence retrieval** (idempotent ingestion, provenance, the
-`research` symbol/question command, recorded experiments). See
+Current milestone: **Phase 6 — recursive file index** (schema v8), on top of
+**Phase 5 — agent usage tracking** (schema v7), **Phase 4E — finding
+supersession** (schema v6), and **Phase 4D — reliable cross-artifact
+evidence retrieval** (idempotent ingestion, provenance, the `research`
+symbol/question command, recorded experiments). See
+[Phase 6](#phase-6-recursive-file-index-schema-v8) for navigating a
+project's file tree and cross-referencing it against ingested source,
 [Phase 5](#phase-5-agent-usage-tracking-schema-v7) for recording real LLM
 token usage and the compact-packet-vs-raw-content estimate,
 [Phase 4E](#phase-4e-finding-supersession-schema-v6) for recording which
@@ -1714,6 +1717,58 @@ measure.
 `add_usage`, `list_usage`, `usage_summary`, `compare_usage_packet_vs_raw` —
 same shape as the CLI, alongside the existing `add_experiment`/
 `research`/etc. tools.
+
+## Phase 6: Recursive File Index (schema v8)
+
+`project_scanner.py` (standalone, stdlib-only, no database dependency —
+see its own module docstring) scans any project root into
+`PROJECT_MAP.json`/`AGENT_INDEX.md`. `database.file_index` is the database
+adapter on top of it: a new table, `file_index`, that makes that same file
+tree queryable and joinable against this database's own evidence — the
+"connect what we already know about file paths" piece.
+
+Deliberately decoupled from every other table: a row is identified only by
+`(collection, path)` TEXT, never a foreign key into `source_artifacts`/
+`source_documents`/etc. That's what makes it portable — it works standalone
+on a project with none of those tables populated, which is also why
+`project_scanner.py` stays completely independent of the `database`
+package: a project that only wants the generic scanner never needs to
+install or touch this schema at all.
+
+```bash
+python3 -m database.file_index --database data/hylandheat.db \
+    ingest /home/oska/RiderProjects/HylandHeat --collection hylandheat-mod-source
+# -> Indexed collection 'hylandheat-mod-source': 87 file(s), 22 director(y/ies), ...
+
+python3 -m database.file_index --database data/hylandheat.db tree hylandheat-mod-source --path HylandHeat/Debug
+python3 -m database.file_index --database data/hylandheat.db find TryStartDeactivation
+python3 -m database.file_index --database data/hylandheat.db context hylandheat-mod-source \
+    HylandHeat/Debug/PoliceActivationDebugPatch.cs
+# # HylandHeat/Debug/PoliceActivationDebugPatch.cs (file, collection 'hylandheat-mod-source')
+# 14846 bytes, 495 line(s), extension .cs
+# Parent: HylandHeat/Debug
+# Siblings (10): DiagnosticSessionLog.cs, GoonLifecycleLaunchDebug.cs, ...
+# source_documents match: id #2011 (source_code, 14846 chars)
+```
+
+Using the **same** `--collection` name `database.ingest_source` already
+used for a root is what makes `context`'s cross-reference real (as shown
+above) rather than an honest "none" — verified against the live database
+in the example. `tree` walks the `parent_path` adjacency list recursively
+via SQLite's own `WITH RECURSIVE`, not a bespoke tree format, so a subtree
+(`--path X`) or the whole collection both use the same query shape.
+
+One deliberate scoping limit: `context` only cross-references
+`source_documents`, never findings/unknowns/decisions/experiments — those
+tables have no path column to join on (only `source_artifact_id` +
+`source_line`, which doesn't identify one file within a multi-file
+artifact like a whole repo). Claiming a link there would mean inventing
+one; `context` reports what's actually joinable and nothing else.
+
+Each `ingest` fully replaces its collection's rows in one transaction —
+a snapshot of what exists *now*, not a history to accumulate the way
+`test_runs`/`experiments` are. MCP tools: `ingest_file_index`,
+`file_index_tree`, `file_index_find`, `file_index_context`.
 
 ## System boundaries: this database vs. Hjarni
 
