@@ -4,7 +4,7 @@ __pycache__/
 .idea/
 reports/
 *.db
-!data/hylandheat.db
+!backups/hylandheat.db
 *.sqlite
 *.sqlite3
 *.db-journal
