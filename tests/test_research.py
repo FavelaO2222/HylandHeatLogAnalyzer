@@ -92,6 +92,41 @@ class ResearchFunctionTests(ResearchFixture, unittest.TestCase):
         self.assertIn('PullOfficer', item['text'])
         self.assertNotIn('NPCEnterableBuilding', item['text'])
 
+    def test_harmony_patch_class_declaration_matches_despite_no_word_boundary(self):
+        # Regression for finding #10: a Harmony patch class conventionally
+        # concatenates the patched member's name with a type prefix and/or
+        # "Patch" suffix, so the member name is a substring with no regex
+        # \b on one or both sides. A weaker, unrelated declaration must not
+        # win instead.
+        self.document('HylandHeat/Debug/PoliceActivationDebugPatch.cs',
+                      'private static void DumpNetworkState(string label, NetworkObject networkObject)\n'
+                      '{\n}\n\n'
+                      '[HarmonyPatch(typeof(NetworkObject), nameof(NetworkObject.TryStartDeactivation))]\n'
+                      'private static class NetworkObjectTryStartDeactivationPatch\n{\n}',
+                      artifact_type='source_code')
+        item = research.research(self.path, 'NetworkObject.TryStartDeactivation')['sections']['mod_source']['items'][0]
+        self.assertEqual(item['kind'], 'declaration')
+        self.assertIn('NetworkObjectTryStartDeactivationPatch', item['text'])
+
+    def test_closest_declaration_to_primary_token_wins_over_first_by_line(self):
+        # Regression for finding #11, isolated from finding #10's fix: even
+        # when the primary token has NO declaration of its own anywhere (so
+        # the locator must fall back to the secondary/enclosing-type token,
+        # here class names deliberately don't contain "Activate" at all),
+        # and multiple candidate declarations exist for that fallback token,
+        # the one closest to an actual occurrence of the primary token must
+        # win -- not whichever comes first by line number.
+        self.document('HylandHeat/Debug/PoliceActivationDebugPatch.cs',
+                      '[HarmonyPatch(typeof(PoliceOfficer), nameof(PoliceOfficer.Deactivate))]\n'
+                      'private static class FirstPatch\n{\n'
+                      '    private static void Prefix(PoliceOfficer __instance)\n    {\n    }\n}\n\n'
+                      '[HarmonyPatch(typeof(PoliceOfficer), nameof(PoliceOfficer.Activate))]\n'
+                      'private static class SecondPatch\n{\n'
+                      '    private static void Prefix(PoliceOfficer __instance)\n    {\n    }\n}',
+                      artifact_type='source_code')
+        item = research.research(self.path, 'PoliceOfficer.Activate')['sections']['mod_source']['items'][0]
+        self.assertEqual(item['line'], 12)  # SecondPatch's own Prefix, not FirstPatch's at line 4
+
     def test_no_match_reports_empty_not_omitted(self):
         result = research.research(self.path, 'TotallyUnknownSymbolXYZ')
         for key, page in result['sections'].items():

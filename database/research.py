@@ -98,28 +98,69 @@ def _tokens(query):
     return tokens
 
 
+def _token_pattern(token):
+    """A word-boundary match for `token`, relaxed at a PascalCase segment
+    edge: a Harmony patch class conventionally concatenates the patched
+    member's own name with a type prefix and/or a "Patch" suffix (e.g.
+    TryStartDeactivation -> NetworkObjectTryStartDeactivationPatch), so the
+    token appears as a substring with a same-case (word) character directly
+    abutting it on one or both sides -- a strict \\b never matches there.
+    Treat the boundary as satisfied there too when the adjacent segment
+    starts (right side) or the token's own segment starts (left side) with
+    an uppercase letter, since that's exactly where a real identifier
+    reader would see one word end and the next begin (see findings #10 and
+    #11: this cost declaration matches in both directions before this)."""
+    left = r'(?<!\w)' if not token[0].isupper() else r'(?:(?<!\w)|(?<=[a-z0-9]))'
+    right = r'(?!\w)' if not token[-1].isalnum() else r'(?:(?!\w)|(?=[A-Z]))'
+    return re.compile(left + re.escape(token) + right)
+
+
 def _locate(content, tokens):
     """The single best representative line for `tokens` (priority order --
-    see _tokens) in `content`: the first declaration-shaped line for the
-    highest-priority token that has one anywhere in the document, else the
-    first line mentioning any token at all. Two passes (declarations across
-    the whole document for each token in turn, then references) rather than
-    one top-to-bottom scan, so a higher-priority token's declaration later in
+    see _tokens) in `content`. Two passes -- declarations across the whole
+    document for each token in turn, then references -- rather than one
+    top-to-bottom scan, so a higher-priority token's declaration later in
     the file still wins over a lower-priority token's declaration earlier in
-    it (e.g. a specific method beats its own enclosing class). Returns None
-    if no token appears as a whole word anywhere -- a document can match
-    FTS's tokenizer without any line satisfying a strict word-boundary check,
-    e.g. across punctuation."""
+    it (e.g. a specific method beats its own enclosing class).
+
+    Within either pass, several lines can equally match the token currently
+    being tried (multiple candidate declarations, or a token search having
+    to fall back from the query's own primary token to a secondary/
+    enclosing-type one because the primary token has no declaration of its
+    own -- see finding #11). The candidate *closest* to wherever the
+    query's own primary token actually appears anywhere in the document
+    wins, rather than whichever comes first by line number: proximity to
+    the thing actually being asked about is a real, if imperfect, proxy for
+    relevance, and "first in the file" is not. Falls back to first-by-line
+    when the primary token doesn't appear at all (nothing to anchor to) or
+    there's only one candidate anyway.
+
+    Returns None if no token appears as a whole word (or PascalCase-segment
+    match; see _token_pattern) anywhere -- a document can match FTS's
+    tokenizer without any line satisfying that check, e.g. across
+    punctuation.
+    """
     lines = content.splitlines()
-    patterns = [re.compile(r'\b' + re.escape(token) + r'\b') for token in tokens]
+    patterns = [_token_pattern(token) for token in tokens]
+    anchor_lines = [ln for ln, line in enumerate(lines, start=1) if patterns[0].search(line)]
+
+    def closest(candidates):
+        if len(candidates) == 1 or not anchor_lines:
+            return candidates[0]
+        return min(candidates, key=lambda c: min(abs(c[0] - anchor) for anchor in anchor_lines))
+
     for pattern in patterns:
-        for line_number, line in enumerate(lines, start=1):
-            if pattern.search(line) and (_TYPE_DECL.match(line) or _METHOD_DECL.match(line)):
-                return {'line': line_number, 'kind': 'declaration', 'text': line.strip()}
+        declarations = [(line_number, line) for line_number, line in enumerate(lines, start=1)
+                        if pattern.search(line) and (_TYPE_DECL.match(line) or _METHOD_DECL.match(line))]
+        if declarations:
+            line_number, line = closest(declarations)
+            return {'line': line_number, 'kind': 'declaration', 'text': line.strip()}
     for pattern in patterns:
-        for line_number, line in enumerate(lines, start=1):
-            if pattern.search(line):
-                return {'line': line_number, 'kind': 'reference', 'text': line.strip()}
+        references = [(line_number, line) for line_number, line in enumerate(lines, start=1)
+                      if pattern.search(line)]
+        if references:
+            line_number, line = closest(references)
+            return {'line': line_number, 'kind': 'reference', 'text': line.strip()}
     return None
 
 
