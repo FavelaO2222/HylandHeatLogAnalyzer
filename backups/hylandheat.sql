@@ -2308,6 +2308,7 @@ INSERT INTO "source_artifacts" VALUES(4,'decompiler_export','/home/oska/.steam/d
 INSERT INTO "source_artifacts" VALUES(5,'source_code','/tmp/hylandheat-source-clean','hylandheat-source-clean',NULL,NULL,'2026-09-08T18:53:54.100Z','{"file_count": 0, "unchanged": 45, "undecodable": 0, "mod_revision": "ad2bfc0-dirty"}');
 INSERT INTO "source_artifacts" VALUES(6,'log','/home/oska/.steam/debian-installation/steamapps/common/Schedule I/MelonLoader/Latest.log','Latest.log','7839b6992d05a200439e55add38fcf6e1f1dadfc6a9acb5085ccd66db60ede7c',NULL,'2026-09-09T01:52:56.130Z','Raw log; path records first registration. Original creation time is unknown.');
 INSERT INTO "source_artifacts" VALUES(7,'log','/home/oska/RiderProjects/HylandHeat/LogReports/20260909T143715Z-kT2PJ5/Latest.log','Latest.log','32338115409980d3ea4bb3c36870027018cd588ba3fd65abcfeb6e121cca5de3',NULL,'2026-09-09T14:43:26.618Z','Raw log; path records first registration. Original creation time is unknown.');
+INSERT INTO "source_artifacts" VALUES(8,'source_code','/home/oska/RiderProjects/HylandHeat','HylandHeat',NULL,NULL,'2026-09-09T15:09:49.944Z','{"file_count": 15, "unchanged": 41, "undecodable": 0, "mod_revision": "fd59a48-dirty"}');
 CREATE TABLE test_runs (
     id INTEGER PRIMARY KEY,
     source_artifact_id INTEGER REFERENCES source_artifacts(id) ON DELETE RESTRICT,
