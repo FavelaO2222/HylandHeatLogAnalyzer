@@ -1583,3 +1583,30 @@ occasionally surface a less useful term than a person would pick by hand.
 
 **Structured and deterministic retrieval first. Semantic retrieval only where
 exact retrieval eventually proves insufficient.**
+
+## System boundaries: this database vs. Hjarni
+
+This SQLite database (`data/hylandheat.db`) is the sole authoritative store
+for Hyland Heat technical findings, unknowns, decisions, and evidence.
+Hjarni — a separate personal-notes system used for cross-session handoff
+summaries — holds only that: handoff summaries, not technical conclusions.
+Any Hjarni note that touches a subject already tracked here must link to
+the specific finding/unknown/decision ID (e.g. "see finding #7") rather
+than restating or re-deriving the claim.
+
+This isn't a hypothetical convention. Finding #5 and a Hjarni note ended up
+disagreeing about whether OfficerLee2 completes activation, without either
+side surfacing the conflict, because nothing stated which system owned the
+technical claim. The database was current — a readiness fix landed
+(`OFFICER_CLONE_GETANDVALIDATE_REAUDIT.md` in the HylandHeat repo) after
+finding #5 was recorded, and finding #5 was never re-checked against it —
+so re-deriving the same conclusion in Hjarni just produced a second, silently
+stale copy instead of catching the drift. See finding #7 for the resolution.
+
+The fix for a two-system split-brain is a stated convention, not more code:
+if a claim about Hyland Heat's code or runtime behavior is worth writing
+down, it goes here first, with the usual provenance (source doc, source
+line, confidence, evidence links), and Hjarni references it by ID. The
+mirror-image instruction — Hjarni notes about Hyland Heat should link back
+here rather than restate findings — belongs in Hjarni's own brain-level
+instructions, not this project.
