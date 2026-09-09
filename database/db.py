@@ -8,8 +8,8 @@ from typing import Optional, Union
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = Path(__file__).resolve().with_name('schema.sql')
-SCHEMA_VERSION = 6
-SUPPORTED_VERSIONS = (1, 2, 3, 4, 5, 6)
+SCHEMA_VERSION = 7
+SUPPORTED_VERSIONS = (1, 2, 3, 4, 5, 6, 7)
 DatabasePath = Optional[Union[str, Path]]
 
 
@@ -99,8 +99,10 @@ def initialize_database(database: DatabasePath = None) -> Path:
     (via _pending_column_additions, since CREATE TABLE IF NOT EXISTS is a
     no-op against the existing v4 table) plus the experiments/
     experiment_symbols tables; v1..v5 -> v6 adds findings.superseded_by_finding_id
-    the same way (see schema.sql). Read-only operations and existing writers
-    never migrate implicitly.
+    the same way; v1..v6 -> v7 adds the agent_usage table -- a whole new table
+    needs no _pending_column_additions entry, CREATE TABLE IF NOT EXISTS
+    handles it identically for a fresh or migrated database (see schema.sql).
+    Read-only operations and existing writers never migrate implicitly.
     """
     path = resolve_database_path(database)
     schema = SCHEMA_PATH.read_text(encoding='utf-8')

@@ -1,4 +1,4 @@
--- Authoritative fresh-database schema v6. db.initialize_database migrates v1-v5 explicitly.
+-- Authoritative fresh-database schema v7. db.initialize_database migrates v1-v6 explicitly.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS schema_metadata (
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 6);
+INSERT OR IGNORE INTO schema_metadata (id, schema_version) VALUES (1, 7);
 
 -- Raw evidence references. created_at is the optional original artifact time.
 CREATE TABLE IF NOT EXISTS source_artifacts (
@@ -317,3 +317,35 @@ CREATE TABLE IF NOT EXISTS experiment_symbols (
 );
 CREATE INDEX IF NOT EXISTS idx_experiment_symbols_symbol ON experiment_symbols (symbol);
 CREATE INDEX IF NOT EXISTS idx_experiment_symbols_experiment ON experiment_symbols (experiment_id);
+
+-- Schema v7: one row per LLM call an external agent (Rider/PyCharm/ChatGPT/...)
+-- makes while using this database, so the brief-first design's actual token
+-- savings can be measured rather than assumed. Nothing here infers or
+-- estimates a token count -- every input_tokens/output_tokens/cost_usd value
+-- is exactly what the caller supplies, pulled from their own API response's
+-- usage field (see database.record_usage). At most one of experiment_id/
+-- test_run_id/source_artifact_id links a call to what it was for; none is
+-- required, since some calls (a general question, a code review) aren't tied
+-- to a specific ingested artifact.
+CREATE TABLE IF NOT EXISTS agent_usage (
+    id INTEGER PRIMARY KEY,
+    agent TEXT NOT NULL CHECK (length(trim(agent)) > 0),
+    model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+    input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+    output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+    cost_usd REAL CHECK (cost_usd IS NULL OR cost_usd >= 0),
+    retrieval_mode TEXT CHECK (retrieval_mode IS NULL OR retrieval_mode IN ('compact_packet', 'raw_log', 'other')),
+    query_text TEXT,
+    experiment_id INTEGER REFERENCES experiments(id) ON DELETE RESTRICT CHECK (experiment_id IS NULL OR experiment_id > 0),
+    test_run_id INTEGER REFERENCES test_runs(id) ON DELETE RESTRICT CHECK (test_run_id IS NULL OR test_run_id > 0),
+    source_artifact_id INTEGER REFERENCES source_artifacts(id) ON DELETE RESTRICT
+        CHECK (source_artifact_id IS NULL OR source_artifact_id > 0),
+    note TEXT,
+    occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK ((experiment_id IS NOT NULL) + (test_run_id IS NOT NULL) + (source_artifact_id IS NOT NULL) <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_usage_agent_model ON agent_usage (agent, model);
+CREATE INDEX IF NOT EXISTS idx_agent_usage_occurred_at ON agent_usage (occurred_at);
+CREATE INDEX IF NOT EXISTS idx_agent_usage_experiment ON agent_usage (experiment_id);
+CREATE INDEX IF NOT EXISTS idx_agent_usage_run ON agent_usage (test_run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_usage_artifact ON agent_usage (source_artifact_id);

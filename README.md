@@ -16,10 +16,12 @@ against an imported test run, and `database.ingest_source` (see
 [Phase 4C](#phase-4c-source-and-decompiled-assembly-ingestion)) makes its
 own source, and the game's decompiled assemblies, full-text searchable too.
 
-Current milestone: **Phase 4E — finding supersession** (schema v6), on top
-of **Phase 4D — reliable cross-artifact evidence retrieval** (idempotent
-ingestion, provenance, the `research` symbol/question command, recorded
-experiments). See
+Current milestone: **Phase 5 — agent usage tracking** (schema v7), on top of
+**Phase 4E — finding supersession** (schema v6) and **Phase 4D — reliable
+cross-artifact evidence retrieval** (idempotent ingestion, provenance, the
+`research` symbol/question command, recorded experiments). See
+[Phase 5](#phase-5-agent-usage-tracking-schema-v7) for recording real LLM
+token usage and the compact-packet-vs-raw-content estimate,
 [Phase 4E](#phase-4e-finding-supersession-schema-v6) for recording which
 finding replaced another, [Phase 4D](#phase-4d-reliable-cross-artifact-evidence-retrieval)
 for the `research` command and its examples,
@@ -1622,6 +1624,96 @@ follow-up. The `research` command's "related evidence/research records"
 section doesn't yet surface this link explicitly (it still lists both rows
 independently via its bounded `LIKE` scan); following the reference from a
 listed finding to its replacement is still a manual step.
+
+## Phase 5: Agent Usage Tracking (schema v7)
+
+Purely additive — nothing about existing log/evidence/source ingestion,
+provenance, or schema changed. One new table, `agent_usage`, records one
+row per LLM call an external agent (Rider, PyCharm, ChatGPT, ...) makes
+while using this database, so the brief-first design's actual token
+savings can be measured instead of assumed.
+
+### `database.record_usage`: only real, caller-supplied numbers
+
+Nothing here infers or estimates a token count. `input_tokens`,
+`output_tokens`, and `cost_usd` are exactly what the caller supplies —
+pulled from their own API response's `usage` field at the call site, the
+same "every field is exactly what the caller supplies" convention as
+`record_finding`/`record_experiment`. This module has no pricing table and
+computes no cost itself; a hardcoded price would silently go stale.
+
+```bash
+python3 -m database.record_usage --database data/hylandheat.db add \
+    --agent Rider --model claude-sonnet-5 \
+    --input-tokens 1500 --output-tokens 300 --cost-usd 0.0117 \
+    --retrieval-mode compact_packet --query-text "NPC.EnterBuilding"
+# -> Recorded usage 1.
+python3 -m database.record_usage --database data/hylandheat.db list
+# [1] 2026-09-09T15:32:06.452Z Rider/claude-sonnet-5: 1500in+300out tokens, $0.0117 (no link)
+```
+
+`agent`/`model` are free text (no fixed enum — new agents/models need no
+schema change). At most one of `--experiment-id`/`--test-run-id`/
+`--source-artifact-id` may link a call to what it was for; none is
+required, since some calls (a general question, a code review) aren't tied
+to a specific ingested artifact. `--retrieval-mode`
+(`compact_packet`/`raw_log`/`other`) and `--query-text` are optional
+context for later comparison against `usage_report`'s estimate below.
+
+Schema: `agent_usage(id, agent, model, input_tokens, output_tokens,
+cost_usd, retrieval_mode, query_text, experiment_id, test_run_id,
+source_artifact_id, note, occurred_at)`, with indexes on `(agent, model)`,
+`occurred_at`, and each link column. A whole new table needs no
+`_ensure_column`-style migration — `CREATE TABLE IF NOT EXISTS` handles a
+fresh or a migrated v1-v6 database identically.
+
+### `database.usage_report summary`: real numbers, grouped
+
+```bash
+python3 -m database.usage_report --database data/hylandheat.db summary
+# Filters: none
+# - PyCharm/gpt-4o: 1 call(s), 5000 in + 800 out tokens, cost unknown (1 call(s) with unknown cost)
+# - Rider/claude-sonnet-5: 1 call(s), 1500 in + 300 out tokens, cost $0.0117
+# Total: 2 call(s), 6500 in + 1100 out tokens, cost $0.0117 (1 call(s) with unknown cost)
+```
+
+Filterable by `--agent`, `--model`, `--since`/`--until` (ISO timestamps,
+compared as text against `occurred_at`). `cost_usd` is summed only across
+rows where it's known; rows with no recorded cost are counted separately
+(`unknown_cost_calls`) rather than silently treated as zero, so an
+incomplete total is never presented as if it were complete. `--format
+json` for structured output.
+
+### `database.usage_report compare`: the actual point of brief-first
+
+This is the one place in the project where a real token count isn't
+available to measure — there's no LLM call happening, so both sides are an
+explicitly-labeled **estimate** (~4 characters per token, a common rough
+approximation — not a real tokenizer, and never mixed into
+`agent_usage`'s real recorded numbers). For a `database.research` query,
+it compares the compact packet a caller actually gets against the full
+raw content of everything that packet was built from — the *same*
+`--limit`-bounded match set rendered two ways, not two different queries.
+
+```bash
+python3 -m database.usage_report --database data/hylandheat.db compare "CartelGoon" --limit 10
+# (estimate only ...; mode=and, N matched item(s) within --limit 10)
+# Compact packet (database.research output): ~1950 tokens
+# Raw underlying content (full matched documents/events/errors): ~40862 tokens
+# Estimated reduction: 95.2%
+```
+
+Only the source/log evidence sections (mod source, decompiled code,
+events, errors) participate — findings/unknowns/decisions/experiments are
+already research conclusions either way, not raw material a caller would
+otherwise paste in, so they're outside what this comparison means to
+measure.
+
+### MCP tools
+
+`add_usage`, `list_usage`, `usage_summary`, `compare_usage_packet_vs_raw` —
+same shape as the CLI, alongside the existing `add_experiment`/
+`research`/etc. tools.
 
 ## System boundaries: this database vs. Hjarni
 

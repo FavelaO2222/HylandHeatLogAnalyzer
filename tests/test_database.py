@@ -18,7 +18,7 @@ from database.init_db import main
 class DatabaseTests(unittest.TestCase):
     TABLES = {'schema_metadata', 'source_artifacts', 'test_runs', 'events', 'errors',
               'entities', 'findings', 'unknowns', 'decisions', 'relationships', 'evidence_links',
-              'source_documents', 'experiments', 'experiment_symbols'}
+              'source_documents', 'experiments', 'experiment_symbols', 'agent_usage'}
     # FTS5 virtual tables plus their shadow tables (search index only; see database/search.py).
     FTS_TABLES = {f'{base}{suffix}' for base in ('events_fts', 'errors_fts', 'source_documents_fts')
                   for suffix in ('', '_data', '_idx', '_docsize', '_config')}

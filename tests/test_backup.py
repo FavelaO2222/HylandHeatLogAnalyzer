@@ -298,6 +298,20 @@ class BackupRestoreTests(unittest.TestCase):
             self.assertEqual(restored.execute('SELECT count(*) FROM experiments').fetchone()[0], 1)
             self.assertEqual(restored.execute('SELECT count(*) FROM experiment_symbols').fetchone()[0], 1)
 
+    def test_dump_includes_agent_usage(self):
+        # agent_usage rows are token counts/cost/agent/model metadata, never
+        # raw source text -- included in the public dump like experiments.
+        from database.record_usage import add_usage
+        self.open_database()
+        add_usage(self.path, 'Rider', 'claude-sonnet-5', 1500, 300, cost_usd=0.0117)
+        dump_database(self.path, self.backup_path)
+        text = self.backup_path.read_text(encoding='utf-8')
+        self.assertIn('claude-sonnet-5', text)
+        restored_path = Path(self.temp.name) / 'restored.db'
+        restore_database(restored_path, self.backup_path)
+        with closing(db.connect_database(restored_path)) as restored:
+            self.assertEqual(restored.execute('SELECT count(*) FROM agent_usage').fetchone()[0], 1)
+
     def test_v1_restore_stays_v1_with_no_search_index(self):
         # A v1 backup restores as v1, with no FTS5 index -- restore never
         # migrates a database implicitly, and a v1 database has no search

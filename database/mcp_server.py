@@ -18,9 +18,10 @@ import sqlite3
 from mcp.server.mcpserver import MCPServer
 
 from . import (backup, context_builder, entity_extraction, evidence, inspect_db, record_decision, record_experiment,
-               record_finding, record_relationship, record_unknown, run_comparison)
+               record_finding, record_relationship, record_unknown, record_usage, run_comparison)
 from . import research as research_module
 from . import search as fts_search
+from . import usage_report
 from .db import database_exists, initialize_database, resolve_database_path
 
 mcp = MCPServer('hyland-heat-research-db')
@@ -399,6 +400,69 @@ def list_experiments(symbol: str | None = None) -> str:
     return _safely(lambda: '\n'.join(
         record_experiment.format_experiment_row(row) for row in record_experiment.list_experiments(_db(), symbol)
     ) or 'No experiments recorded.')
+
+
+@mcp.tool(structured_output=True)
+def add_usage(agent: str, model: str, input_tokens: int, output_tokens: int, cost_usd: float | None = None,
+             retrieval_mode: str | None = None, query_text: str | None = None,
+             experiment_id: int | None = None, test_run_id: int | None = None,
+             source_artifact_id: int | None = None, note: str | None = None) -> dict[str, object]:
+    """Record one LLM call's real, API-reported token usage. Requires schema v7.
+
+    input_tokens/output_tokens/cost_usd must be exactly what your own API
+    response's usage field reported -- this tool never estimates or infers
+    them. retrieval_mode ('compact_packet'/'raw_log'/'other') and query_text
+    are optional context for later comparison against usage_report's
+    estimate. At most one of experiment_id/test_run_id/source_artifact_id
+    may be set, to say what the call was for; none is required.
+    """
+    try:
+        usage_id = record_usage.add_usage(
+            _db(), agent, model, input_tokens, output_tokens, cost_usd=cost_usd,
+            retrieval_mode=retrieval_mode, query_text=query_text, experiment_id=experiment_id,
+            test_run_id=test_run_id, source_artifact_id=source_artifact_id, note=note)
+        return {'id': usage_id, 'agent': agent, 'model': model,
+                'input_tokens': input_tokens, 'output_tokens': output_tokens}
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool()
+def list_usage(agent: str | None = None, model: str | None = None,
+               since: str | None = None, until: str | None = None) -> str:
+    """List recorded agent_usage rows, optionally filtered by agent, model,
+    and/or an ISO-timestamp occurred_at range. Requires schema v7."""
+    return _safely(lambda: '\n'.join(
+        record_usage.format_usage_row(row) for row in
+        record_usage.list_usage(_db(), agent=agent, model=model, since=since, until=until)
+    ) or 'No usage recorded.')
+
+
+@mcp.tool(structured_output=True)
+def usage_summary(agent: str | None = None, model: str | None = None,
+                  since: str | None = None, until: str | None = None) -> dict[str, object]:
+    """Summarize recorded agent_usage rows by agent and model, optionally filtered
+    by agent, model, and/or an ISO-timestamp occurred_at range. Requires schema v7.
+    Real recorded numbers only -- see database.usage_report's module docstring.
+    """
+    try:
+        return usage_report.summarize(_db(), agent=agent, model=model, since=since, until=until)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
+
+
+@mcp.tool(structured_output=True)
+def compare_usage_packet_vs_raw(query: str, limit: int = 6) -> dict[str, object]:
+    """Estimate token cost of answering `query` from the compact evidence packet
+    `research` builds vs. from the full raw content of everything it matched.
+    Requires schema v7. Both numbers are a chars/4 estimate, not a real API
+    count -- see database.usage_report's module docstring; this demonstrates
+    the brief-first design's savings, it doesn't measure a real call.
+    """
+    try:
+        return usage_report.compare_packet_vs_raw(_db(), query, limit=limit)
+    except (sqlite3.Error, OSError, ValueError, RuntimeError) as exc:
+        return {'error': str(exc)}
 
 
 def main(argv=None):

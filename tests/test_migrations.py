@@ -28,6 +28,7 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(after.pop('source_documents'), [])
             self.assertEqual(after.pop('experiments'), [])
             self.assertEqual(after.pop('experiment_symbols'), [])
+            self.assertEqual(after.pop('agent_usage'), [])
             # findings gained a trailing superseded_by_finding_id column in v6;
             # every legacy row keeps its values with that new column NULL.
             self.assertEqual([row + (None,) for row in before.pop('findings')], after.pop('findings'))

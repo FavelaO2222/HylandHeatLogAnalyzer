@@ -23,6 +23,7 @@ from database.mcp_server import (
     attach_evidence, list_evidence, compare_runs,
     search, rebuild_search_index,
     research, add_experiment, list_experiments,
+    add_usage, list_usage, usage_summary, compare_usage_packet_vs_raw,
 )
 
 
@@ -258,6 +259,32 @@ class McpServerToolTests(unittest.TestCase):
         self.assertIn('error', result)
         self.assertIn('question must not be empty', result['error'])
 
+    def test_add_and_list_usage(self):
+        result = add_usage('Rider', 'claude-sonnet-5', 1500, 300, cost_usd=0.0117)
+        self.assertEqual(result['id'], 1)
+        self.assertEqual(result['agent'], 'Rider')
+        text = list_usage()
+        self.assertIn('Rider/claude-sonnet-5', text)
+        self.assertIn('1500in+300out', text)
+        self.assertEqual(list_usage(agent='NoSuchAgent'), 'No usage recorded.')
+
+    def test_add_usage_validation_error_surfaces_real_message(self):
+        result = add_usage('  ', 'model', 1, 1)
+        self.assertIn('error', result)
+        self.assertIn('agent must not be empty', result['error'])
+
+    def test_usage_summary_groups_by_agent_and_model(self):
+        add_usage('Rider', 'claude-sonnet-5', 100, 20, cost_usd=0.01)
+        add_usage('ChatGPT', 'gpt-4o', 300, 60)
+        result = usage_summary()
+        self.assertEqual(len(result['groups']), 2)
+        self.assertEqual(result['totals']['calls'], 2)
+
+    def test_compare_usage_packet_vs_raw_no_matches(self):
+        result = compare_usage_packet_vs_raw('NoSuchSymbolAnywhere')
+        self.assertEqual(result['raw_tokens_estimate'], 0)
+        self.assertIsNone(result['reduction_pct_estimate'])
+
     def test_backup_database_error_surfaces_real_message(self):
         # configure() self-initializes a missing database, so it can't produce this error path;
         # plant a genuine foreign-key violation instead (bypassing connect_database's enforcement,
@@ -295,7 +322,8 @@ class McpServerProtocolTests(unittest.IsolatedAsyncioTestCase):
                              'add_relationship', 'list_relationships',
                              'sync_entities', 'list_entities', 'build_context', 'build_entity_context',
                              'inspect_database', 'backup_database', 'attach_evidence', 'list_evidence', 'compare_runs',
-                             'search', 'rebuild_search_index', 'research', 'add_experiment', 'list_experiments'):
+                             'search', 'rebuild_search_index', 'research', 'add_experiment', 'list_experiments',
+                             'add_usage', 'list_usage', 'usage_summary', 'compare_usage_packet_vs_raw'):
                 self.assertIn(expected, names)
 
             result = await client.call_tool('add_finding', {'finding': 'Protocol round trip works'})

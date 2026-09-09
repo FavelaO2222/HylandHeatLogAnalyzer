@@ -1,4 +1,21 @@
 BEGIN TRANSACTION;
+CREATE TABLE agent_usage (
+    id INTEGER PRIMARY KEY,
+    agent TEXT NOT NULL CHECK (length(trim(agent)) > 0),
+    model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+    input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
+    output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
+    cost_usd REAL CHECK (cost_usd IS NULL OR cost_usd >= 0),
+    retrieval_mode TEXT CHECK (retrieval_mode IS NULL OR retrieval_mode IN ('compact_packet', 'raw_log', 'other')),
+    query_text TEXT,
+    experiment_id INTEGER REFERENCES experiments(id) ON DELETE RESTRICT CHECK (experiment_id IS NULL OR experiment_id > 0),
+    test_run_id INTEGER REFERENCES test_runs(id) ON DELETE RESTRICT CHECK (test_run_id IS NULL OR test_run_id > 0),
+    source_artifact_id INTEGER REFERENCES source_artifacts(id) ON DELETE RESTRICT
+        CHECK (source_artifact_id IS NULL OR source_artifact_id > 0),
+    note TEXT,
+    occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    CHECK ((experiment_id IS NOT NULL) + (test_run_id IS NOT NULL) + (source_artifact_id IS NOT NULL) <= 1)
+);
 CREATE TABLE decisions (
     id INTEGER PRIMARY KEY,
     subject_entity_id INTEGER REFERENCES entities(id) ON DELETE RESTRICT,
@@ -2288,7 +2305,7 @@ CREATE TABLE schema_metadata (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-INSERT INTO "schema_metadata" VALUES(1,6,'2026-09-08T01:58:01.369Z','2026-09-09T04:08:08.860Z');
+INSERT INTO "schema_metadata" VALUES(1,7,'2026-09-08T01:58:01.369Z','2026-09-09T15:32:00.408Z');
 CREATE TABLE source_artifacts (
     id INTEGER PRIMARY KEY,
     artifact_type TEXT NOT NULL CHECK (artifact_type IN
@@ -2412,4 +2429,9 @@ CREATE INDEX idx_experiments_run ON experiments (test_run_id);
 CREATE INDEX idx_experiment_symbols_symbol ON experiment_symbols (symbol);
 CREATE INDEX idx_experiment_symbols_experiment ON experiment_symbols (experiment_id);
 CREATE INDEX idx_findings_superseded_by ON findings (superseded_by_finding_id);
+CREATE INDEX idx_agent_usage_agent_model ON agent_usage (agent, model);
+CREATE INDEX idx_agent_usage_occurred_at ON agent_usage (occurred_at);
+CREATE INDEX idx_agent_usage_experiment ON agent_usage (experiment_id);
+CREATE INDEX idx_agent_usage_run ON agent_usage (test_run_id);
+CREATE INDEX idx_agent_usage_artifact ON agent_usage (source_artifact_id);
 COMMIT;
